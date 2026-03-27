@@ -208,6 +208,38 @@ class AdminPortalController extends Controller
         return response()->json($users);
     }
 
+    public function createAdminUser(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')],
+            'role' => ['required', Rule::in(self::INTERNAL_USER_ROLES)],
+            'password' => ['nullable', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $password = $validated['password'] ?? Str::random(12);
+
+        $user = User::query()->create([
+            'name' => $validated['name'],
+            'email' => strtolower($validated['email']),
+            'role' => $validated['role'],
+            'password' => Hash::make($password),
+            'is_enabled' => true,
+        ]);
+
+        try {
+            $body = "Hello {$user->name},\n\nAn account has been created for you on the WSI portal.\n\nEmail: {$user->email}\nPassword: {$password}\n\nPlease sign in and change your password.";
+
+            Mail::raw($body, fn ($message) => $message->to($user->email)->subject('Your WSI Portal account'));
+        } catch (\Throwable $e) {
+        }
+
+        return response()->json([
+            'message' => 'User created successfully.',
+            'user' => PortalFormatter::adminUser($user->fresh()),
+        ], 201);
+    }
+
     public function updateClientBilling(Request $request, User $user): JsonResponse
     {
         abort_unless($user->role === 'customer', 422, 'Only customer accounts can be updated from Manage Services.');

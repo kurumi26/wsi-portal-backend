@@ -34,6 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('/admin')->middleware('admin')->group(function () {
         Route::get('/clients', [AdminPortalController::class, 'clients']);
         Route::get('/users', [AdminPortalController::class, 'adminUsers']);
+        Route::post('/users', [AdminPortalController::class, 'createAdminUser']);
         Route::get('/purchases', [AdminPortalController::class, 'purchases']);
         Route::patch('/purchases/{portalOrder}/approve', [AdminPortalController::class, 'approveOrder']);
         Route::get('/customer-services', [AdminPortalController::class, 'services']);

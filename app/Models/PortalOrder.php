@@ -18,6 +18,7 @@ class PortalOrder extends Model
         'user_id',
         'total_amount',
         'payment_method',
+        'customer_note',
         'agreement_accepted',
         'terms_accepted',
         'privacy_accepted',

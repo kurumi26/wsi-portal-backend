@@ -174,6 +174,7 @@ class PortalFormatter
             'serviceName' => $firstItem?->service_name ?? 'Service Order',
             'amount' => (float) $order->total_amount,
             'paymentMethod' => $order->payment_method,
+            'note' => $firstItem?->customer_note ?? $order->customer_note,
             'status' => self::ORDER_LABELS[$order->status] ?? $order->status,
             'statusKey' => $order->status,
             'date' => $order->created_at?->toISOString(),

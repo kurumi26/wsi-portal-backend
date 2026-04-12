@@ -18,6 +18,7 @@ class OrderItem extends Model
         'category',
         'configuration',
         'addon',
+        'customer_note',
         'price',
         'billing_cycle',
         'provisioning_status',

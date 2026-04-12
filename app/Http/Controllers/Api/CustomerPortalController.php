@@ -173,8 +173,10 @@ class CustomerPortalController extends Controller
             'cart.*.category' => ['required', 'string'],
             'cart.*.configuration' => ['required', 'string'],
             'cart.*.addon' => ['nullable', 'string'],
+            'cart.*.note' => ['nullable', 'string', 'max:1000'],
             'cart.*.price' => ['required', 'numeric'],
             'paymentMethod' => ['required', 'string'],
+            'note' => ['nullable', 'string', 'max:1000'],
             'agreementAccepted' => ['required', 'boolean'],
         ]);
 
@@ -191,12 +193,14 @@ class CustomerPortalController extends Controller
 
             return collect($validated['cart'])->map(function (array $item) use ($request, $validated, $serviceMap) {
                 $service = $serviceMap->get($item['serviceId']);
+                $customerNote = $item['note'] ?? $validated['note'] ?? null;
 
                 $order = PortalOrder::create([
                     'order_number' => $this->generateOrderNumber(),
                     'user_id' => $request->user()->id,
                     'total_amount' => $item['price'],
                     'payment_method' => $validated['paymentMethod'],
+                    'customer_note' => $customerNote,
                     'agreement_accepted' => true,
                     'terms_accepted' => true,
                     'privacy_accepted' => true,
@@ -210,6 +214,7 @@ class CustomerPortalController extends Controller
                     'category' => $item['category'],
                     'configuration' => $item['configuration'],
                     'addon' => $item['addon'] ?? null,
+                    'customer_note' => $customerNote,
                     'price' => $item['price'],
                     'billing_cycle' => $service->billing_cycle,
                     'provisioning_status' => 'pending_review',

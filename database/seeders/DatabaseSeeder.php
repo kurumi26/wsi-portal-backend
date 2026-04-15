@@ -426,6 +426,7 @@ class DatabaseSeeder extends Seeder
             $record->addons()->createMany(collect($service['addons'])->map(fn ($addon) => [
                 'label' => $addon['label'],
                 'extra_price' => $addon['extra_price'],
+                'billing_cycle' => $addon['billing_cycle'] ?? $service['billing_cycle'],
             ])->all());
 
             return $record;

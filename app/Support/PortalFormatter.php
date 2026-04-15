@@ -7,6 +7,7 @@ use App\Models\PortalNotification;
 use App\Models\PortalOrder;
 use App\Models\ProfileUpdateRequest;
 use App\Models\Service;
+use App\Models\ServiceAddon;
 use App\Models\User;
 
 class PortalFormatter
@@ -154,12 +155,9 @@ class PortalFormatter
             'name' => $service->name,
             'description' => $service->description,
             'price' => (float) $service->price,
-            'billing' => self::BILLING_LABELS[$service->billing_cycle] ?? $service->billing_cycle,
+            'billing' => BillingCycle::label($service->billing_cycle),
             'configurations' => $service->configurations->pluck('label')->values()->all(),
-            'addons' => $service->addons->map(fn ($addon) => [
-                'label' => $addon->label,
-                'price' => (float) $addon->extra_price,
-            ])->values()->all(),
+            'addons' => $service->addons->map(fn (ServiceAddon $addon) => self::serviceAddon($addon, $service->billing_cycle))->values()->all(),
         ];
     }
 
@@ -209,12 +207,18 @@ class PortalFormatter
             'renewsOn' => $service->renews_on?->toISOString(),
             'plan' => $service->plan,
             'basePrice' => $catalogService?->price ? (float) $catalogService->price : null,
-            'billing' => $catalogService ? (self::BILLING_LABELS[$catalogService->billing_cycle] ?? $catalogService->billing_cycle) : null,
-            'addons' => $catalogService?->addons?->map(fn ($addon) => [
-                'label' => $addon->label,
-                'price' => (float) $addon->extra_price,
-            ])->values()->all() ?? [],
+            'billing' => $catalogService ? BillingCycle::label($catalogService->billing_cycle) : null,
+            'addons' => $catalogService?->addons?->map(fn (ServiceAddon $addon) => self::serviceAddon($addon, $catalogService->billing_cycle))->values()->all() ?? [],
             'migrationPaths' => $migrationPaths,
+        ];
+    }
+
+    private static function serviceAddon(ServiceAddon $addon, ?string $parentBillingCycle = null): array
+    {
+        return [
+            'label' => $addon->label,
+            'price' => (float) $addon->extra_price,
+            'billingCycle' => BillingCycle::addonValue($addon->billing_cycle, $parentBillingCycle),
         ];
     }
 

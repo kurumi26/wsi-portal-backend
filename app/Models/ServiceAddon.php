@@ -14,6 +14,7 @@ class ServiceAddon extends Model
         'service_id',
         'label',
         'extra_price',
+        'billing_cycle',
     ];
 
     protected function casts(): array

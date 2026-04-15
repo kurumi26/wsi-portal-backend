@@ -9,6 +9,7 @@ use App\Models\PortalOrder;
 use App\Models\ProfileUpdateRequest;
 use App\Models\Service;
 use App\Models\User;
+use App\Support\BillingCycle;
 use App\Support\PortalFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -87,56 +88,55 @@ class AdminPortalController extends Controller
 
     public function createCatalogService(Request $request): JsonResponse
     {
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string', 'max:2000'],
-            'category' => ['required', 'string', 'max:255'],
-            'price' => ['required', 'numeric', 'min:0'],
-            'billingCycle' => ['required', Rule::in(['monthly', 'yearly', 'one_time'])],
-            'addons' => ['nullable', 'array'],
-            'addons.*.label' => ['required', 'string', 'max:255'],
-            'addons.*.price' => ['nullable', 'numeric', 'min:0'],
-        ]);
+        $validated = $this->validateCatalogServiceRequest($request);
 
-        $baseSlug = Str::slug($validated['name']);
-        $slug = $baseSlug;
-        $suffix = 2;
+        $service = DB::transaction(function () use ($validated) {
+            $service = Service::query()->create([
+                'slug' => $this->generateUniqueServiceSlug($validated['name']),
+                'category' => $validated['category'],
+                'name' => $validated['name'],
+                'description' => $validated['description'] ?: 'WSI managed service offering for '.$validated['name'].'.',
+                'price' => $validated['price'],
+                'billing_cycle' => $validated['billingCycle'],
+                'is_active' => true,
+            ]);
 
-        while (Service::query()->where('slug', $slug)->exists()) {
-            $slug = $baseSlug.'-'.$suffix;
-            $suffix++;
-        }
+            $this->syncCatalogServiceConfiguration($service, $validated['name']);
+            $this->syncCatalogServiceAddons($service, $validated['addons'], $validated['billingCycle']);
 
-        $service = Service::query()->create([
-            'slug' => $slug,
-            'category' => $validated['category'],
-            'name' => $validated['name'],
-            'description' => $validated['description'] ?: 'WSI managed service offering for '.$validated['name'].'.',
-            'price' => $validated['price'],
-            'billing_cycle' => $validated['billingCycle'],
-            'is_active' => true,
-        ]);
-
-        $service->configurations()->create([
-            'label' => $validated['name'],
-        ]);
-
-        $addons = collect($validated['addons'] ?? [])
-            ->filter(fn (array $addon) => filled($addon['label'] ?? null))
-            ->map(fn (array $addon) => [
-                'label' => $addon['label'],
-                'extra_price' => $addon['price'] ?? 0,
-            ])
-            ->values();
-
-        $service->addons()->createMany($addons->isNotEmpty()
-            ? $addons->all()
-            : [['label' => 'No add-on', 'extra_price' => 0]]);
+            return $service->fresh()->load(['configurations', 'addons']);
+        });
 
         return response()->json([
             'message' => 'Service offering created successfully.',
-            'service' => PortalFormatter::service($service->fresh()->load(['configurations', 'addons'])),
+            'service' => PortalFormatter::service($service),
         ], 201);
+    }
+
+    public function updateCatalogService(Request $request, Service $service): JsonResponse
+    {
+        $validated = $this->validateCatalogServiceRequest($request);
+        $previousName = $service->name;
+
+        $service = DB::transaction(function () use ($validated, $service, $previousName) {
+            $service->update([
+                'category' => $validated['category'],
+                'name' => $validated['name'],
+                'description' => $validated['description'] ?: 'WSI managed service offering for '.$validated['name'].'.',
+                'price' => $validated['price'],
+                'billing_cycle' => $validated['billingCycle'],
+            ]);
+
+            $this->syncCatalogServiceConfiguration($service, $validated['name'], $previousName);
+            $this->syncCatalogServiceAddons($service, $validated['addons'], $validated['billingCycle']);
+
+            return $service->fresh()->load(['configurations', 'addons']);
+        });
+
+        return response()->json([
+            'message' => 'Service offering updated successfully.',
+            'service' => PortalFormatter::service($service),
+        ]);
     }
 
     public function createService(Request $request): JsonResponse
@@ -721,6 +721,144 @@ class AdminPortalController extends Controller
     private function ensureInternalUser(User $user): void
     {
         abort_unless(in_array($user->role, self::INTERNAL_USER_ROLES, true), 422, 'This account is not managed from the Users page.');
+    }
+
+    private function validateCatalogServiceRequest(Request $request): array
+    {
+        return validator($this->prepareCatalogServicePayload($request->all()), [
+            'name' => ['required', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:2000'],
+            'category' => ['required', 'string', 'max:255'],
+            'price' => ['required', 'numeric', 'min:0'],
+            'billingCycle' => ['required', 'string', Rule::in(BillingCycle::values())],
+            'addons' => ['required', 'array'],
+            'addons.*' => ['required', 'array'],
+            'addons.*.label' => ['required', 'string', 'max:255'],
+            'addons.*.price' => ['required', 'numeric', 'min:0'],
+            'addons.*.billingCycle' => ['nullable', 'string', Rule::in(BillingCycle::values())],
+        ])->validate();
+    }
+
+    private function prepareCatalogServicePayload(array $payload): array
+    {
+        $serviceBillingCycle = $this->normalizeBillingCycleInput($this->billingCycleInput($payload));
+        $addons = $payload['addons'] ?? [];
+
+        if (is_array($addons)) {
+            $fallbackAddonBillingCycle = BillingCycle::normalize($serviceBillingCycle);
+
+            $addons = array_values(array_map(function ($addon) use ($fallbackAddonBillingCycle) {
+                if (! is_array($addon)) {
+                    return $addon;
+                }
+
+                $addonBillingCycle = $this->normalizeBillingCycleInput($this->billingCycleInput($addon));
+
+                if ($addonBillingCycle === null) {
+                    $addonBillingCycle = $fallbackAddonBillingCycle;
+                }
+
+                return [
+                    ...$addon,
+                    'billingCycle' => $addonBillingCycle,
+                ];
+            }, $addons));
+        }
+
+        return [
+            ...$payload,
+            'billingCycle' => $serviceBillingCycle,
+            'addons' => $addons,
+        ];
+    }
+
+    private function syncCatalogServiceConfiguration(Service $service, string $serviceName, ?string $previousName = null): void
+    {
+        $configurations = $service->configurations()->orderBy('id')->get();
+
+        if ($configurations->isEmpty()) {
+            $service->configurations()->create(['label' => $serviceName]);
+
+            return;
+        }
+
+        $configuration = $previousName
+            ? $configurations->firstWhere('label', $previousName)
+            : null;
+
+        if (! $configuration && $configurations->count() === 1) {
+            $configuration = $configurations->first();
+        }
+
+        if ($configuration) {
+            $configuration->update(['label' => $serviceName]);
+        }
+    }
+
+    private function syncCatalogServiceAddons(Service $service, array $addons, string $serviceBillingCycle): void
+    {
+        $service->addons()->delete();
+
+        $records = collect($addons)
+            ->map(fn (array $addon) => [
+                'label' => $addon['label'],
+                'extra_price' => $addon['price'],
+                'billing_cycle' => BillingCycle::addonValue($addon['billingCycle'] ?? null, $serviceBillingCycle),
+            ])
+            ->values();
+
+        $service->addons()->createMany($records->isNotEmpty()
+            ? $records->all()
+            : [[
+                'label' => 'No add-on',
+                'extra_price' => 0,
+                'billing_cycle' => $serviceBillingCycle,
+            ]]);
+    }
+
+    private function generateUniqueServiceSlug(string $name): string
+    {
+        $baseSlug = Str::slug($name);
+
+        if ($baseSlug === '') {
+            $baseSlug = 'service';
+        }
+
+        $slug = $baseSlug;
+        $suffix = 2;
+
+        while (Service::query()->where('slug', $slug)->exists()) {
+            $slug = $baseSlug.'-'.$suffix;
+            $suffix++;
+        }
+
+        return $slug;
+    }
+
+    private function billingCycleInput(array $payload): mixed
+    {
+        if (array_key_exists('billingCycle', $payload)) {
+            return $payload['billingCycle'];
+        }
+
+        if (array_key_exists('billing_cycle', $payload)) {
+            return $payload['billing_cycle'];
+        }
+
+        return null;
+    }
+
+    private function normalizeBillingCycleInput(mixed $value): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_string($value) && trim($value) === '') {
+            return null;
+        }
+
+        return BillingCycle::normalize($value) ?? $value;
     }
 
     private function sendRegistrationDecisionEmail(User $user, bool $approved, ?string $note = null): void

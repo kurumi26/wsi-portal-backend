@@ -39,6 +39,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/purchases/{portalOrder}/approve', [AdminPortalController::class, 'approveOrder']);
         Route::get('/customer-services', [AdminPortalController::class, 'services']);
         Route::post('/catalog-services', [AdminPortalController::class, 'createCatalogService']);
+        Route::patch('/catalog-services/{service}', [AdminPortalController::class, 'updateCatalogService']);
         Route::post('/customer-services', [AdminPortalController::class, 'createService']);
         Route::patch('/customer-services/{customerService}/request-cancellation', [AdminPortalController::class, 'requestServiceCancellation']);
         Route::patch('/customer-services/{customerService}/approve-cancellation', [AdminPortalController::class, 'approveServiceCancellation']);

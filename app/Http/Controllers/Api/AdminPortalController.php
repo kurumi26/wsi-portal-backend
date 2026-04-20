@@ -58,13 +58,10 @@ class AdminPortalController extends Controller
     public function purchases(): JsonResponse
     {
         $purchases = PortalOrder::query()
-            ->with(['user', 'items'])
+            ->with(['user.registrationReviewer', 'items', 'payments'])
             ->latest()
             ->get()
-            ->map(fn (PortalOrder $order) => [
-                ...PortalFormatter::order($order),
-                'client' => $order->user->name,
-            ])
+            ->map(fn (PortalOrder $order) => $this->adminPurchasePayload($order))
             ->values();
 
         return response()->json($purchases);
@@ -538,10 +535,7 @@ class AdminPortalController extends Controller
 
         return response()->json([
             'message' => 'Order approved successfully.',
-            'order' => [
-                ...PortalFormatter::order($portalOrder->fresh('items', 'user')),
-                'client' => $portalOrder->user->name,
-            ],
+            'order' => $this->adminPurchasePayload($portalOrder->fresh(['items', 'payments', 'user.registrationReviewer'])),
         ]);
     }
 
@@ -721,6 +715,34 @@ class AdminPortalController extends Controller
     private function ensureInternalUser(User $user): void
     {
         abort_unless(in_array($user->role, self::INTERNAL_USER_ROLES, true), 422, 'This account is not managed from the Users page.');
+    }
+
+    private function adminPurchasePayload(PortalOrder $order): array
+    {
+        return [
+            ...PortalFormatter::order($order),
+            'client' => $order->user->name,
+            'billing_in_charge' => $this->purchaseBillingInCharge($order),
+            'deal_owner' => $order->user->registrationReviewer?->name,
+            'stage' => $this->purchaseStage($order),
+        ];
+    }
+
+    private function purchaseBillingInCharge(PortalOrder $order): ?string
+    {
+        $name = trim((string) $order->user->name);
+
+        return $name !== '' ? $name : null;
+    }
+
+    private function purchaseStage(PortalOrder $order): string
+    {
+        return match ($order->status) {
+            'paid' => 'Closed Won',
+            'pending_review' => 'Pending Review',
+            'failed' => 'Closed Lost',
+            default => 'Open',
+        };
     }
 
     private function validateCatalogServiceRequest(Request $request): array

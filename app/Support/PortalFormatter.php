@@ -3,6 +3,8 @@
 namespace App\Support;
 
 use App\Models\CustomerService;
+use App\Models\HelpdeskTicket;
+use App\Models\HelpdeskTicketActivity;
 use App\Models\PortalNotification;
 use App\Models\PortalOrder;
 use App\Models\ProfileUpdateRequest;
@@ -247,6 +249,91 @@ class PortalFormatter
             'createdAt' => $notification->created_at?->toISOString(),
             'type' => self::NOTIFICATION_TYPE_LABELS[$notification->type] ?? $notification->type,
             'isRead' => (bool) $notification->is_read,
+        ];
+    }
+
+    public static function helpdeskTicket(HelpdeskTicket $ticket, bool $includeActivities = false): array
+    {
+        $ticket->loadMissing(['customer', 'customerService', 'assignedTo']);
+
+        if ($includeActivities) {
+            $ticket->loadMissing('activities.actor');
+        }
+
+        $payload = [
+            'id' => $ticket->id,
+            'reference' => $ticket->reference_number,
+            'title' => $ticket->title,
+            'message' => $ticket->message,
+            'category' => $ticket->category,
+            'status' => $ticket->status,
+            'priority' => $ticket->priority,
+            'source' => $ticket->source,
+            'createdAt' => $ticket->created_at?->toISOString(),
+            'updatedAt' => $ticket->updated_at?->toISOString(),
+            'resolvedAt' => $ticket->resolved_at?->toISOString(),
+            'closedAt' => $ticket->closed_at?->toISOString(),
+            'serviceId' => $ticket->service_id,
+            'serviceName' => $ticket->customerService?->name,
+            'clientId' => $ticket->customer_id,
+            'clientName' => $ticket->customer?->name,
+            'clientEmail' => $ticket->customer?->email,
+            'assignedTo' => self::helpdeskAssignedUser($ticket->assignedTo),
+        ];
+
+        if ($includeActivities) {
+            $payload['activities'] = $ticket->activities
+                ->map(fn (HelpdeskTicketActivity $activity) => self::helpdeskActivity($activity))
+                ->values()
+                ->all();
+        }
+
+        return $payload;
+    }
+
+    public static function helpdeskTicketSummary(HelpdeskTicket $ticket): array
+    {
+        $ticket->loadMissing('customerService');
+
+        return [
+            'id' => $ticket->id,
+            'reference' => $ticket->reference_number,
+            'title' => $ticket->title,
+            'serviceName' => $ticket->customerService?->name,
+            'category' => $ticket->category,
+            'status' => $ticket->status,
+            'createdAt' => $ticket->created_at?->toISOString(),
+            'updatedAt' => $ticket->updated_at?->toISOString(),
+        ];
+    }
+
+    private static function helpdeskAssignedUser(?User $user): ?array
+    {
+        if (! $user) {
+            return null;
+        }
+
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'role' => self::INTERNAL_ROLE_LABELS[$user->role] ?? ucfirst(str_replace('_', ' ', $user->role)),
+        ];
+    }
+
+    private static function helpdeskActivity(HelpdeskTicketActivity $activity): array
+    {
+        return [
+            'id' => $activity->id,
+            'action' => $activity->action,
+            'oldValue' => $activity->old_value,
+            'newValue' => $activity->new_value,
+            'note' => $activity->note,
+            'createdAt' => $activity->created_at?->toISOString(),
+            'actor' => $activity->actor ? [
+                'id' => $activity->actor->id,
+                'name' => $activity->actor->name,
+                'role' => self::INTERNAL_ROLE_LABELS[$activity->actor->role] ?? ucfirst(str_replace('_', ' ', $activity->actor->role)),
+            ] : null,
         ];
     }
 }

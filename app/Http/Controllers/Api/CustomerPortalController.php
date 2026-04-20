@@ -4,15 +4,18 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
+use App\Models\HelpdeskTicket;
 use App\Models\PortalNotification;
 use App\Models\PortalOrder;
 use App\Models\Service;
+use App\Services\HelpdeskService;
 use App\Support\PortalFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use App\Models\User;
+use Illuminate\Validation\Rule;
 
 class CustomerPortalController extends Controller
 {
@@ -86,38 +89,23 @@ class CustomerPortalController extends Controller
         return response()->json(['message' => 'Notification dismissed.']);
     }
 
-    public function reportServiceIssue(Request $request, CustomerService $customerService): JsonResponse
+    public function reportServiceIssue(Request $request, CustomerService $customerService, HelpdeskService $helpdeskService): JsonResponse
     {
         abort_unless($customerService->user_id === $request->user()->id, 403);
 
         $validated = $request->validate([
+            'title' => ['nullable', 'string', 'max:255'],
             'message' => ['nullable', 'string', 'max:2000'],
+            'category' => ['nullable', 'string', 'max:255'],
+            'priority' => ['nullable', 'string', Rule::in(HelpdeskTicket::PRIORITIES)],
         ]);
 
-        $message = $validated['message'] ?? 'Customer reports the service is not functioning.';
+        $ticket = $helpdeskService->createCustomerTicket($customerService, $request->user(), $validated);
 
-        // Notify the customer that their report was received
-        PortalNotification::create([
-            'user_id' => $request->user()->id,
-            'title' => 'Service issue reported',
-            'message' => 'We received your report: '.$message,
-            'type' => 'info',
-        ]);
-
-        // Notify admins and technical support users
-        User::query()
-            ->whereIn('role', ['admin', 'technical_support'])
-            ->get()
-            ->each(function (User $admin) use ($customerService, $request, $message) {
-                PortalNotification::create([
-                    'user_id' => $admin->id,
-                    'title' => 'Service reported as not functioning',
-                    'message' => $request->user()->name.' reported an issue for service "'.$customerService->name.'": '.$message,
-                    'type' => 'danger',
-                ]);
-            });
-
-        return response()->json(['message' => 'Issue reported. Support will review this shortly.']);
+        return response()->json([
+            'message' => 'Issue reported. Support will review this shortly.',
+            'ticket' => PortalFormatter::helpdeskTicket($ticket, true),
+        ], 201);
     }
 
     public function requestServiceCancellation(Request $request, CustomerService $customerService): JsonResponse

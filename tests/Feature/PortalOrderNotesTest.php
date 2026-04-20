@@ -78,4 +78,127 @@ class PortalOrderNotesTest extends TestCase
             ->assertJsonPath('0.serviceName', $orderItem->service_name)
             ->assertJsonPath('0.note', 'Desired domain: example.com');
     }
+
+    public function test_admin_purchases_include_flattened_billing_owner_and_stage_fields(): void
+    {
+        $reviewer = User::factory()->create([
+            'name' => 'Michelle Durian',
+            'role' => 'admin',
+            'is_enabled' => true,
+        ]);
+
+        $customerWithOwner = User::factory()->create([
+            'name' => 'Maria Santos',
+            'email' => 'maria@example.com',
+            'role' => 'customer',
+            'is_enabled' => true,
+            'registration_status' => 'approved',
+            'registration_reviewed_by' => $reviewer->id,
+        ]);
+
+        $customerWithoutOwner = User::factory()->create([
+            'name' => 'John Doe',
+            'email' => 'john@example.com',
+            'role' => 'customer',
+            'is_enabled' => true,
+            'registration_status' => 'approved',
+        ]);
+
+        $admin = User::factory()->create([
+            'role' => 'admin',
+            'is_enabled' => true,
+        ]);
+
+        $service = Service::query()->create([
+            'slug' => 'managed-hosting',
+            'category' => 'Hosting',
+            'name' => 'Managed Hosting',
+            'description' => 'Managed hosting package.',
+            'price' => 4999,
+            'billing_cycle' => 'monthly',
+            'is_active' => true,
+        ]);
+
+        $closedWonOrder = PortalOrder::query()->create([
+            'order_number' => 'WSI-100001',
+            'user_id' => $customerWithOwner->id,
+            'total_amount' => 4999,
+            'payment_method' => 'bank_transfer',
+            'status' => 'paid',
+        ]);
+
+        $closedWonOrder->items()->create([
+            'service_id' => $service->id,
+            'service_name' => $service->name,
+            'category' => $service->category,
+            'configuration' => 'Starter',
+            'addon' => null,
+            'price' => 4999,
+            'billing_cycle' => 'monthly',
+            'provisioning_status' => 'undergoing_provisioning',
+        ]);
+
+        $pendingReviewOrder = PortalOrder::query()->create([
+            'order_number' => 'WSI-100002',
+            'user_id' => $customerWithOwner->id,
+            'total_amount' => 5999,
+            'payment_method' => 'bank_transfer',
+            'status' => 'pending_review',
+        ]);
+
+        $pendingReviewOrder->items()->create([
+            'service_id' => $service->id,
+            'service_name' => $service->name,
+            'category' => $service->category,
+            'configuration' => 'Growth',
+            'addon' => null,
+            'price' => 5999,
+            'billing_cycle' => 'monthly',
+            'provisioning_status' => 'pending_review',
+        ]);
+
+        $closedLostOrder = PortalOrder::query()->create([
+            'order_number' => 'WSI-100003',
+            'user_id' => $customerWithoutOwner->id,
+            'total_amount' => 6999,
+            'payment_method' => 'bank_transfer',
+            'status' => 'failed',
+        ]);
+
+        $closedLostOrder->items()->create([
+            'service_id' => $service->id,
+            'service_name' => $service->name,
+            'category' => $service->category,
+            'configuration' => 'Scale',
+            'addon' => null,
+            'price' => 6999,
+            'billing_cycle' => 'monthly',
+            'provisioning_status' => 'unpaid',
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/admin/purchases');
+
+        $response
+            ->assertOk()
+            ->assertJsonFragment([
+                'id' => $closedWonOrder->order_number,
+                'billing_in_charge' => 'Maria Santos',
+                'deal_owner' => 'Michelle Durian',
+                'stage' => 'Closed Won',
+            ])
+            ->assertJsonFragment([
+                'id' => $pendingReviewOrder->order_number,
+                'billing_in_charge' => 'Maria Santos',
+                'deal_owner' => 'Michelle Durian',
+                'stage' => 'Pending Review',
+            ])
+            ->assertJsonFragment([
+                'id' => $closedLostOrder->order_number,
+                'billing_in_charge' => 'John Doe',
+                'deal_owner' => null,
+                'stage' => 'Closed Lost',
+            ]);
+    }
 }

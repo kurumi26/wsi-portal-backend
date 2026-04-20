@@ -1,9 +1,11 @@
 <?php
 
 use App\Http\Controllers\Api\AdminPortalController;
+use App\Http\Controllers\Api\AdminHelpdeskController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CatalogController;
 use App\Http\Controllers\Api\CustomerPortalController;
+use App\Http\Controllers\Api\HelpdeskController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', fn () => ['status' => 'ok']);
@@ -22,6 +24,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/auth/sessions/{token}', [AuthController::class, 'destroySession']);
     Route::get('/orders/me', [CustomerPortalController::class, 'orders']);
     Route::get('/customer-services/me', [CustomerPortalController::class, 'services']);
+    Route::get('/helpdesk/tickets/me', [HelpdeskController::class, 'index']);
     Route::post('/customer-services/{customerService}/report-issue', [CustomerPortalController::class, 'reportServiceIssue']);
     Route::get('/notifications/me', [CustomerPortalController::class, 'notifications']);
     Route::patch('/notifications/{notification}', [CustomerPortalController::class, 'updateNotification']);
@@ -36,6 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/users', [AdminPortalController::class, 'adminUsers']);
         Route::post('/users', [AdminPortalController::class, 'createAdminUser']);
         Route::get('/purchases', [AdminPortalController::class, 'purchases']);
+        Route::get('/helpdesk/tickets', [AdminHelpdeskController::class, 'index']);
+        Route::get('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'show']);
+        Route::patch('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'update']);
         Route::patch('/purchases/{portalOrder}/approve', [AdminPortalController::class, 'approveOrder']);
         Route::get('/customer-services', [AdminPortalController::class, 'services']);
         Route::post('/catalog-services', [AdminPortalController::class, 'createCatalogService']);

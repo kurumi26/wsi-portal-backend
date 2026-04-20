@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class CustomerService extends Model
 {
@@ -53,5 +54,10 @@ class CustomerService extends Model
     public function cancellationReviewer(): BelongsTo
     {
         return $this->belongsTo(User::class, 'cancellation_reviewed_by');
+    }
+
+    public function helpdeskTickets(): HasMany
+    {
+        return $this->hasMany(HelpdeskTicket::class, 'service_id');
     }
 }

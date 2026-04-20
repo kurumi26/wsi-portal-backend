@@ -21,6 +21,8 @@ class DatabaseSeeder extends Seeder
         DB::statement('SET FOREIGN_KEY_CHECKS=0');
         DB::table('personal_access_tokens')->truncate();
         DB::table('profile_update_requests')->truncate();
+        DB::table('helpdesk_ticket_activities')->truncate();
+        DB::table('helpdesk_tickets')->truncate();
         DB::table('portal_notifications')->truncate();
         DB::table('customer_services')->truncate();
         DB::table('payments')->truncate();

@@ -7,6 +7,180 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## WSI Helpdesk API
+
+The portal now uses dedicated `helpdesk_tickets` and `helpdesk_ticket_activities` tables as the source of truth for support issues.
+
+Supported ticket statuses:
+
+- `Open`
+- `In Progress`
+- `Escalated`
+- `Resolved`
+- `Closed`
+
+Supported ticket priorities:
+
+- `Low`
+- `Normal`
+- `High`
+- `Urgent`
+
+### Customer issue submission
+
+`POST /api/customer-services/{customerService}/report-issue`
+
+Example request:
+
+```json
+{
+	"title": "Website not loading",
+	"message": "Customer reports the website is down.",
+	"category": "Technical",
+	"priority": "High"
+}
+```
+
+Example response:
+
+```json
+{
+	"message": "Issue reported. Support will review this shortly.",
+	"ticket": {
+		"id": 123,
+		"reference": "T-000123",
+		"title": "Website not loading",
+		"message": "Customer reports the website is down.",
+		"category": "Technical",
+		"status": "Open",
+		"priority": "High",
+		"source": "customer_portal",
+		"createdAt": "2026-04-15T10:00:00Z",
+		"updatedAt": "2026-04-15T10:00:00Z",
+		"resolvedAt": null,
+		"closedAt": null,
+		"serviceId": 88,
+		"serviceName": "Business Hosting",
+		"clientId": 45,
+		"clientName": "Acme Corp",
+		"clientEmail": "admin@acme.com",
+		"assignedTo": null,
+		"activities": [
+			{
+				"id": 1,
+				"action": "ticket_created",
+				"oldValue": null,
+				"newValue": {
+					"reference": "T-000123",
+					"status": "Open",
+					"priority": "High"
+				},
+				"note": null,
+				"createdAt": "2026-04-15T10:00:00Z",
+				"actor": {
+					"id": 45,
+					"name": "Acme Corp",
+					"role": "Customer"
+				}
+			}
+		]
+	}
+}
+```
+
+### Admin helpdesk list
+
+`GET /api/admin/helpdesk/tickets`
+
+Supported query parameters:
+
+- `status`
+- `assigned_to_user_id`
+- `category`
+- `customer_id`
+- `service_id`
+- `date_from`
+- `date_to`
+- `search`
+
+Example request:
+
+`GET /api/admin/helpdesk/tickets?status=Open&assigned_to_user_id=9&search=hosting`
+
+### Admin helpdesk update
+
+`PATCH /api/admin/helpdesk/tickets/{ticket}`
+
+Example request:
+
+```json
+{
+	"assigned_to_user_id": 9,
+	"status": "In Progress",
+	"priority": "High",
+	"internal_note": "Assigned to infrastructure support for deeper review."
+}
+```
+
+Example response:
+
+```json
+{
+	"message": "Helpdesk ticket updated successfully.",
+	"ticket": {
+		"id": 123,
+		"reference": "T-000123",
+		"title": "Website not loading",
+		"message": "Customer reports the website is down.",
+		"category": "Technical",
+		"status": "In Progress",
+		"priority": "High",
+		"source": "customer_portal",
+		"createdAt": "2026-04-15T10:00:00Z",
+		"updatedAt": "2026-04-15T11:30:00Z",
+		"resolvedAt": null,
+		"closedAt": null,
+		"serviceId": 88,
+		"serviceName": "Business Hosting",
+		"clientId": 45,
+		"clientName": "Acme Corp",
+		"clientEmail": "admin@acme.com",
+		"assignedTo": {
+			"id": 9,
+			"name": "John Support",
+			"role": "Technical Support"
+		}
+	}
+}
+```
+
+### Admin helpdesk detail
+
+`GET /api/admin/helpdesk/tickets/{ticket}`
+
+Returns the full ticket record together with customer, service, assigned agent, timestamps, and activity history.
+
+### Customer ticket tracker
+
+`GET /api/helpdesk/tickets/me`
+
+Returns only the authenticated customer's tickets in summary form:
+
+```json
+[
+	{
+		"id": 123,
+		"reference": "T-000123",
+		"title": "Website not loading",
+		"serviceName": "Business Hosting",
+		"category": "Technical",
+		"status": "In Progress",
+		"createdAt": "2026-04-15T10:00:00Z",
+		"updatedAt": "2026-04-15T11:30:00Z"
+	}
+]
+```
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

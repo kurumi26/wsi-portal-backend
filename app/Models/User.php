@@ -69,6 +69,21 @@ class User extends Authenticatable
         return $this->hasMany(PortalNotification::class);
     }
 
+    public function reportedHelpdeskTickets(): HasMany
+    {
+        return $this->hasMany(HelpdeskTicket::class, 'customer_id');
+    }
+
+    public function assignedHelpdeskTickets(): HasMany
+    {
+        return $this->hasMany(HelpdeskTicket::class, 'assigned_to_user_id');
+    }
+
+    public function helpdeskTicketActivities(): HasMany
+    {
+        return $this->hasMany(HelpdeskTicketActivity::class, 'actor_user_id');
+    }
+
     public function profileUpdateRequests(): HasMany
     {
         return $this->hasMany(ProfileUpdateRequest::class);

@@ -54,4 +54,9 @@ class PortalOrder extends Model
     {
         return $this->hasMany(Payment::class, 'portal_order_id');
     }
+
+    public function contracts(): HasMany
+    {
+        return $this->hasMany(Contract::class, 'order_id');
+    }
 }

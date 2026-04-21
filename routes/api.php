@@ -2,8 +2,10 @@
 
 use App\Http\Controllers\Api\AdminPortalController;
 use App\Http\Controllers\Api\AdminHelpdeskController;
+use App\Http\Controllers\Api\AdminContractsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CatalogController;
+use App\Http\Controllers\Api\ContractsController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\HelpdeskController;
 use Illuminate\Support\Facades\Route;
@@ -13,6 +15,9 @@ Route::get('/health', fn () => ['status' => 'ok']);
 Route::post('/auth/register', [AuthController::class, 'register']);
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::get('/services', [CatalogController::class, 'index']);
+Route::get('/services/{customerService}/agreement.pdf', [ContractsController::class, 'downloadServiceAgreement'])->name('services.agreement.download');
+Route::get('/contracts/{contract}/download', [ContractsController::class, 'download'])->name('contracts.download');
+Route::get('/contracts/{contract}/signed-document', [ContractsController::class, 'downloadSignedDocument'])->name('contracts.signed-document.download');
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
@@ -24,6 +29,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/auth/sessions/{token}', [AuthController::class, 'destroySession']);
     Route::get('/orders/me', [CustomerPortalController::class, 'orders']);
     Route::get('/customer-services/me', [CustomerPortalController::class, 'services']);
+    Route::get('/contracts/me', [ContractsController::class, 'indexMine']);
+    Route::patch('/contracts/{contract}/decision', [ContractsController::class, 'recordDecision']);
+    Route::post('/contracts/{contract}/signed-document', [ContractsController::class, 'uploadSignedDocument']);
     Route::get('/helpdesk/tickets/me', [HelpdeskController::class, 'index']);
     Route::post('/customer-services/{customerService}/report-issue', [CustomerPortalController::class, 'reportServiceIssue']);
     Route::get('/notifications/me', [CustomerPortalController::class, 'notifications']);
@@ -35,9 +43,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{portalOrder}/upload-proof', [CustomerPortalController::class, 'uploadPaymentProof']);
 
     Route::prefix('/admin')->middleware('admin')->group(function () {
+        Route::get('/contracts', [AdminContractsController::class, 'index']);
         Route::get('/clients', [AdminPortalController::class, 'clients']);
         Route::get('/users', [AdminPortalController::class, 'adminUsers']);
         Route::post('/users', [AdminPortalController::class, 'createAdminUser']);
+        Route::post('/contracts/{contract}/signed-document', [AdminContractsController::class, 'uploadSignedDocument']);
+        Route::match(['patch', 'post'], '/contracts/{contract}/verify', [AdminContractsController::class, 'verify']);
         Route::get('/purchases', [AdminPortalController::class, 'purchases']);
         Route::get('/helpdesk/tickets', [AdminHelpdeskController::class, 'index']);
         Route::get('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'show']);

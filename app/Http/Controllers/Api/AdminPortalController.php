@@ -9,6 +9,7 @@ use App\Models\PortalOrder;
 use App\Models\ProfileUpdateRequest;
 use App\Models\Service;
 use App\Models\User;
+use App\Services\ContractService;
 use App\Support\BillingCycle;
 use App\Support\PortalFormatter;
 use Illuminate\Http\JsonResponse;
@@ -136,7 +137,7 @@ class AdminPortalController extends Controller
         ]);
     }
 
-    public function createService(Request $request): JsonResponse
+    public function createService(Request $request, ContractService $contractService): JsonResponse
     {
         $validated = $request->validate([
             'userId' => ['required', 'integer', 'exists:users,id'],
@@ -175,6 +176,8 @@ class AdminPortalController extends Controller
             'status' => $mappedStatus,
             'renews_on' => $validated['renewsOn'],
         ]);
+
+        $contractService->ensureServiceContract($customerService);
 
         PortalNotification::create([
             'user_id' => $customer->id,
@@ -495,7 +498,7 @@ class AdminPortalController extends Controller
         ]);
     }
 
-    public function approveOrder(PortalOrder $portalOrder): JsonResponse
+    public function approveOrder(PortalOrder $portalOrder, ContractService $contractService): JsonResponse
     {
         if ($portalOrder->status !== 'pending_review') {
             return response()->json(['message' => 'Only pending review orders can be approved.'], 422);
@@ -503,17 +506,19 @@ class AdminPortalController extends Controller
 
         $portalOrder->loadMissing(['user', 'items.customerService']);
 
-        DB::transaction(function () use ($portalOrder) {
+        DB::transaction(function () use ($portalOrder, $contractService) {
             $portalOrder->update([
                 'status' => 'paid',
             ]);
 
             foreach ($portalOrder->items as $item) {
                 if ($item->customerService) {
+                    $contractService->attachCustomerService($portalOrder, $item->customerService);
+
                     continue;
                 }
 
-                CustomerService::create([
+                $customerService = CustomerService::create([
                     'user_id' => $portalOrder->user_id,
                     'service_id' => $item->service_id,
                     'order_item_id' => $item->id,
@@ -523,6 +528,8 @@ class AdminPortalController extends Controller
                     'status' => 'undergoing_provisioning',
                     'renews_on' => $this->renewalDate($item->billing_cycle),
                 ]);
+
+                $contractService->attachCustomerService($portalOrder, $customerService);
             }
 
             PortalNotification::create([

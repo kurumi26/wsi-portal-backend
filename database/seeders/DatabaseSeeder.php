@@ -23,6 +23,8 @@ class DatabaseSeeder extends Seeder
         DB::table('profile_update_requests')->truncate();
         DB::table('helpdesk_ticket_activities')->truncate();
         DB::table('helpdesk_tickets')->truncate();
+        DB::table('contract_audit_logs')->truncate();
+        DB::table('contracts')->truncate();
         DB::table('portal_notifications')->truncate();
         DB::table('customer_services')->truncate();
         DB::table('payments')->truncate();

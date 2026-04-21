@@ -8,13 +8,14 @@ use App\Models\HelpdeskTicket;
 use App\Models\PortalNotification;
 use App\Models\PortalOrder;
 use App\Models\Service;
+use App\Services\ContractService;
 use App\Services\HelpdeskService;
 use App\Support\PortalFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use App\Models\User;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class CustomerPortalController extends Controller
@@ -152,7 +153,7 @@ class CustomerPortalController extends Controller
         return response()->json(['message' => 'Cancellation request submitted.']);
     }
 
-    public function checkout(Request $request): JsonResponse
+    public function checkout(Request $request, ContractService $contractService): JsonResponse
     {
         $validated = $request->validate([
             'cart' => ['required', 'array', 'min:1'],
@@ -169,17 +170,17 @@ class CustomerPortalController extends Controller
         ]);
 
         if (! $validated['agreementAccepted']) {
-            return response()->json(['message' => 'Please accept the agreement, terms, and privacy policy.'], 400);
+            return response()->json(['message' => 'Please accept the agreement, terms, and privacy policy before checkout.'], 422);
         }
 
         // Create pending orders for admin review instead of immediately processing payments
-        $orders = DB::transaction(function () use ($request, $validated) {
+        $orders = DB::transaction(function () use ($request, $validated, $contractService) {
             $serviceMap = Service::query()
                 ->whereIn('id', collect($validated['cart'])->pluck('serviceId'))
                 ->get()
                 ->keyBy('id');
 
-            return collect($validated['cart'])->map(function (array $item) use ($request, $validated, $serviceMap) {
+            return collect($validated['cart'])->map(function (array $item) use ($request, $validated, $serviceMap, $contractService) {
                 $service = $serviceMap->get($item['serviceId']);
                 $customerNote = $item['note'] ?? $validated['note'] ?? null;
 
@@ -207,6 +208,8 @@ class CustomerPortalController extends Controller
                     'billing_cycle' => $service->billing_cycle,
                     'provisioning_status' => 'pending_review',
                 ]);
+
+                $contractService->createOrderContract($order, $orderItem, $request->user(), $request);
 
                 return $order->load('items');
             });

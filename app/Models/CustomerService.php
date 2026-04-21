@@ -60,4 +60,9 @@ class CustomerService extends Model
     {
         return $this->hasMany(HelpdeskTicket::class, 'service_id');
     }
+
+    public function contracts(): HasMany
+    {
+        return $this->hasMany(Contract::class, 'customer_service_id');
+    }
 }

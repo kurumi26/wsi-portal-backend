@@ -14,6 +14,7 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->decimal('total_amount', 10, 2);
             $table->string('payment_method');
+            $table->text('customer_note')->nullable();
             $table->boolean('agreement_accepted')->default(false);
             $table->boolean('terms_accepted')->default(false);
             $table->boolean('privacy_accepted')->default(false);

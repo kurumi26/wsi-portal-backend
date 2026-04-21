@@ -64,6 +64,16 @@ class User extends Authenticatable
         return $this->hasMany(CustomerService::class);
     }
 
+    public function contracts(): HasMany
+    {
+        return $this->hasMany(Contract::class);
+    }
+
+    public function contractAuditLogs(): HasMany
+    {
+        return $this->hasMany(ContractAuditLog::class);
+    }
+
     public function portalNotifications(): HasMany
     {
         return $this->hasMany(PortalNotification::class);

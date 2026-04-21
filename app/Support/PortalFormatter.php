@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\Contract;
 use App\Models\CustomerService;
 use App\Models\HelpdeskTicket;
 use App\Models\HelpdeskTicketActivity;
@@ -11,6 +12,9 @@ use App\Models\ProfileUpdateRequest;
 use App\Models\Service;
 use App\Models\ServiceAddon;
 use App\Models\User;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
 
 class PortalFormatter
 {
@@ -252,6 +256,75 @@ class PortalFormatter
         ];
     }
 
+    public static function contract(Contract $contract): array
+    {
+        $contract->loadMissing(['user', 'order.items', 'customerService.service', 'verifiedBy', 'signedDocumentUploader']);
+
+        $client = $contract->user;
+        $order = $contract->order;
+        $firstOrderItem = $order?->items?->first();
+        $customerService = $contract->customerService;
+        $customerServiceId = $contract->customer_service_id ?? $customerService?->id;
+        $catalogServiceId = $customerService?->service_id ?? $firstOrderItem?->service_id;
+        $serviceId = $customerServiceId ?? $catalogServiceId;
+        $serviceName = $contract->service_name ?? $customerService?->name ?? $firstOrderItem?->service_name;
+        $signedDocumentUrl = $contract->signed_document_path
+            ? URL::temporarySignedRoute(
+                'contracts.signed-document.download',
+                now()->addDay(),
+                ['contract' => $contract->external_key]
+            )
+            : null;
+        $verificationStatus = $contract->verification_status
+            ?: ($contract->verified_at ? Contract::VERIFICATION_VERIFIED : Contract::VERIFICATION_PENDING);
+
+        return [
+            'id' => $contract->external_key,
+            'externalKey' => $contract->external_key,
+            'scope' => $contract->scope,
+            'title' => $contract->title,
+            'description' => $contract->description,
+            'clientId' => (string) $contract->user_id,
+            'clientName' => $client?->name,
+            'serviceId' => $serviceId,
+            'customerServiceId' => $customerServiceId,
+            'catalogServiceId' => $catalogServiceId,
+            'serviceName' => $serviceName,
+            'orderId' => $contract->order_id,
+            'orderNumber' => $order?->order_number,
+            'status' => $contract->status,
+            'version' => $contract->version,
+            'issuedAt' => $contract->created_at?->toISOString(),
+            'acceptedAt' => $contract->accepted_at?->toISOString(),
+            'rejectedAt' => $contract->rejected_at?->toISOString(),
+            'decisionAt' => $contract->decision_at?->toISOString(),
+            'decisionBy' => $contract->decision_by,
+            'verifiedAt' => $contract->verified_at?->toISOString(),
+            'verifiedBy' => $contract->verifiedBy?->name,
+            'verificationStatus' => $verificationStatus,
+            'verification_status' => $verificationStatus,
+            'isVerified' => $verificationStatus === Contract::VERIFICATION_VERIFIED,
+            'requiresSignedDocument' => (bool) $contract->requires_signed_document,
+            'signedDocumentName' => $contract->signed_document_name,
+            'signedDocumentUploadedAt' => $contract->signed_document_uploaded_at?->toISOString(),
+            'signedDocumentUploadedBy' => $contract->signedDocumentUploader?->name,
+            'signedDocumentUrl' => $signedDocumentUrl,
+            'signed_document_name' => $contract->signed_document_name,
+            'signed_document_uploaded_at' => $contract->signed_document_uploaded_at?->toISOString(),
+            'signed_document_uploaded_by' => $contract->signedDocumentUploader?->name,
+            'signed_document_url' => $signedDocumentUrl,
+            'downloadUrl' => URL::temporarySignedRoute(
+                'contracts.download',
+                now()->addDay(),
+                ['contract' => $contract->external_key]
+            ),
+            'auditReference' => $contract->audit_reference ?? self::contractAuditReference($contract),
+            'documentSections' => ! empty($contract->document_sections)
+                ? $contract->document_sections
+                : Contract::defaultDocumentSections(),
+        ];
+    }
+
     public static function helpdeskTicket(HelpdeskTicket $ticket, bool $includeActivities = false): array
     {
         $ticket->loadMissing(['customer', 'customerService', 'assignedTo']);
@@ -335,5 +408,27 @@ class PortalFormatter
                 'role' => self::INTERNAL_ROLE_LABELS[$activity->actor->role] ?? ucfirst(str_replace('_', ' ', $activity->actor->role)),
             ] : null,
         ];
+    }
+
+    private static function contractAuditReference(Contract $contract): ?string
+    {
+        if ($contract->order?->order_number) {
+            return 'ORDER-'.$contract->order->order_number;
+        }
+
+        if ($contract->customer_service_id) {
+            return 'SERVICE-'.$contract->customer_service_id;
+        }
+
+        return $contract->external_key ? strtoupper($contract->external_key) : null;
+    }
+
+    private static function absoluteUrl(string $value): string
+    {
+        if (Str::startsWith($value, ['http://', 'https://'])) {
+            return $value;
+        }
+
+        return url($value);
     }
 }

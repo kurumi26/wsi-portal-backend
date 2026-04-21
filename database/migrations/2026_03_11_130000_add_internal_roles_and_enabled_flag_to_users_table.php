@@ -13,13 +13,18 @@ return new class extends Migration
             $table->boolean('is_enabled')->default(true)->after('role');
         });
 
-        DB::statement("ALTER TABLE users MODIFY role ENUM('customer', 'admin', 'technical_support', 'sales') NOT NULL DEFAULT 'customer'");
+        if (Schema::getConnection()->getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE users MODIFY role ENUM('customer', 'admin', 'technical_support', 'sales') NOT NULL DEFAULT 'customer'");
+        }
     }
 
     public function down(): void
     {
         DB::statement("UPDATE users SET role = 'admin' WHERE role IN ('technical_support', 'sales')");
-        DB::statement("ALTER TABLE users MODIFY role ENUM('customer', 'admin') NOT NULL DEFAULT 'customer'");
+
+        if (Schema::getConnection()->getDriverName() !== 'sqlite') {
+            DB::statement("ALTER TABLE users MODIFY role ENUM('customer', 'admin') NOT NULL DEFAULT 'customer'");
+        }
 
         Schema::table('users', function (Blueprint $table) {
             $table->dropColumn('is_enabled');

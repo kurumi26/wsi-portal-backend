@@ -18,7 +18,7 @@ return new class extends Migration
             $table->string('addon')->nullable();
             $table->decimal('price', 10, 2);
             $table->enum('billing_cycle', ['monthly', 'yearly', 'one_time'])->default('monthly');
-            $table->enum('provisioning_status', ['active', 'expired', 'unpaid', 'undergoing_provisioning'])->default('undergoing_provisioning');
+            $table->enum('provisioning_status', ['active', 'expired', 'unpaid', 'undergoing_provisioning', 'pending_review'])->default('undergoing_provisioning');
             $table->timestamps();
         });
     }

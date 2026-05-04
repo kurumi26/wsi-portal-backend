@@ -17,6 +17,7 @@ class PortalOrder extends Model
         'order_number',
         'user_id',
         'total_amount',
+        'invoice_id',
         'payment_method',
         'customer_note',
         'agreement_accepted',
@@ -58,5 +59,10 @@ class PortalOrder extends Model
     public function contracts(): HasMany
     {
         return $this->hasMany(Contract::class, 'order_id');
+    }
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class, 'invoice_id');
     }
 }

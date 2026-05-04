@@ -18,7 +18,7 @@ return new class extends Migration
             $table->boolean('agreement_accepted')->default(false);
             $table->boolean('terms_accepted')->default(false);
             $table->boolean('privacy_accepted')->default(false);
-            $table->enum('status', ['paid', 'failed', 'pending_review'])->default('paid');
+            $table->enum('status', ['paid', 'failed', 'pending_review', 'approved'])->default('pending_review');
             $table->timestamps();
         });
     }

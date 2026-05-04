@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
+use App\Models\Invoice;
 use App\Models\PortalNotification;
 use App\Models\PortalOrder;
 use App\Models\ProfileUpdateRequest;
@@ -59,13 +60,156 @@ class AdminPortalController extends Controller
     public function purchases(): JsonResponse
     {
         $purchases = PortalOrder::query()
-            ->with(['user.registrationReviewer', 'items', 'payments'])
+            ->with(['user.registrationReviewer', 'items', 'payments', 'invoice.proofs'])
             ->latest()
             ->get()
             ->map(fn (PortalOrder $order) => $this->adminPurchasePayload($order))
             ->values();
 
         return response()->json($purchases);
+    }
+
+    public function createPurchase(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'userId' => ['nullable', 'integer'],
+            'serviceName' => ['required', 'string', 'max:255'],
+            'category' => ['nullable', 'string', 'max:255'],
+            'amount' => ['required', 'numeric', 'min:0'],
+            'paymentMethod' => ['nullable', 'string', 'max:255'],
+            'status' => ['nullable', 'string'],
+            'notes' => ['nullable', 'string', 'max:2000'],
+            'dueDate' => ['nullable', 'date'],
+        ]);
+        // Resolve client by userId, email, or company aliases
+        $client = null;
+        if (! empty($validated['userId'])) {
+            $client = User::query()->find($validated['userId']);
+        }
+
+        if (! $client) {
+            $client = $this->resolveUserFromRequest($request);
+        }
+
+        if (! $client) {
+            return response()->json(['message' => 'Client account not found. Provide a valid userId, email, or company.'], 422);
+        }
+        abort_unless($client->role === 'customer', 422, 'Only customer accounts can receive purchases.');
+
+        if ($client->registration_status === 'pending' || $client->registration_status === 'rejected') {
+            return response()->json(['message' => 'Approve the client registration before creating purchases.'], 422);
+        }
+
+        $adminUserId = $request->user()->id;
+
+        $order = DB::transaction(function () use ($validated, $client, $adminUserId) {
+            $order = PortalOrder::query()->create([
+                'order_number' => $this->generateOrderNumber(),
+                'user_id' => $client->id,
+                'total_amount' => $validated['amount'],
+                'payment_method' => $validated['paymentMethod'] ?? 'manual',
+                'customer_note' => $validated['notes'] ?? null,
+                'agreement_accepted' => false,
+                'terms_accepted' => false,
+                'privacy_accepted' => false,
+                'status' => $validated['status'] ?? 'pending_review',
+            ]);
+
+            $order->items()->create([
+                'service_id' => null,
+                'service_name' => $validated['serviceName'],
+                'category' => $validated['category'] ?? 'Misc',
+                'configuration' => null,
+                'billing_cycle' => null,
+                'unit_price' => $validated['amount'],
+                'quantity' => 1,
+                'provisioning_status' => null,
+            ]);
+
+            // create invoice and link to order
+            $invoice = \App\Models\Invoice::createPortalInvoice([
+                'invoice_number' => \App\Models\Invoice::generateInvoiceNumber(),
+                'portal_order_id' => $order->id,
+                'user_id' => $client->id,
+                'client_name' => $client->company ?: $client->name,
+                'company_name' => $client->company,
+                'subtotal' => $validated['amount'],
+                'discounts' => 0,
+                'total_amount' => $validated['amount'],
+                'status' => 'pending_review',
+                'due_date' => $validated['dueDate'] ?? now()->addDays(7)->toDateString(),
+            ]);
+
+            $order->update(['invoice_id' => $invoice->id]);
+
+            PortalNotification::create([
+                'user_id' => $client->id,
+                'title' => 'Manual invoice created',
+                'message' => 'An invoice was issued for '.$validated['serviceName'].'.',
+                'type' => 'info',
+            ]);
+
+            return $order->fresh(['items', 'payments', 'user.registrationReviewer']);
+        });
+
+        return response()->json([
+            'message' => 'Purchase created successfully.',
+            'order' => $this->adminPurchasePayload($order),
+        ], 201);
+    }
+
+    public function markPurchasePaid(Request $request, PortalOrder $portalOrder): JsonResponse
+    {
+        $validated = $request->validate([
+            'paymentReference' => ['nullable', 'string', 'max:255'],
+            'paidAt' => ['nullable', 'date'],
+            'method' => ['nullable', 'string', 'max:255'],
+            'note' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        $invoice = DB::transaction(function () use ($portalOrder, $validated, $request) {
+            $portalOrder = PortalOrder::query()
+                ->with(['user', 'items', 'payments', 'invoice'])
+                ->lockForUpdate()
+                ->findOrFail($portalOrder->id);
+
+            $portalOrder = $this->ensureOrderInvoice($portalOrder);
+            $invoice = $portalOrder->invoice;
+
+            if ($invoice->paid_at) {
+                return $invoice;
+            }
+
+            $portalOrder->payments()->create([
+                'amount' => $invoice->total_amount,
+                'method' => $validated['method'] ?? $portalOrder->payment_method ?? 'manual',
+                'status' => 'success',
+                'transaction_ref' => $validated['paymentReference'] ?? null,
+            ]);
+
+            $invoice->update([
+                'status' => 'paid',
+                'paid_at' => $validated['paidAt'] ?? now(),
+                'paid_by' => $request->user()->id,
+                'payment_reference' => $validated['paymentReference'] ?? null,
+                'internal_note' => $validated['note'] ?? null,
+            ]);
+
+            return $invoice->fresh(['proofs', 'user']);
+        });
+
+        $portalOrder = PortalOrder::query()
+            ->with(['user.registrationReviewer', 'items', 'payments', 'invoice.proofs'])
+            ->findOrFail($portalOrder->id);
+
+        $purchase = $this->adminPurchasePayload($portalOrder);
+
+        return response()->json([
+            'message' => 'Purchase invoice marked paid successfully.',
+            'purchase' => $purchase,
+            'order' => $purchase,
+            'invoice' => PortalFormatter::invoice($invoice),
+        ]);
     }
 
     public function services(): JsonResponse
@@ -76,7 +220,9 @@ class AdminPortalController extends Controller
             ->get()
             ->map(fn (CustomerService $service) => [
                 ...PortalFormatter::customerService($service),
-                'client' => $service->user->name,
+                'userId' => (string) $service->user_id,
+                'company' => $service->user->company ?? null,
+                'client' => $service->user->company ?? $service->user->name,
                 'clientEmail' => $service->user->email,
             ])
             ->values();
@@ -105,10 +251,32 @@ class AdminPortalController extends Controller
             return $service->fresh()->load(['configurations', 'addons']);
         });
 
-        return response()->json([
+        // Optionally create a linked customer service if the admin selected a client/company
+        $linkedService = null;
+        if ($request->filled('userId') || $request->filled('user_id') || $request->filled('email') || $request->filled('company') || $request->filled('client') || $request->filled('clientName') || $request->filled('customer')) {
+            try {
+                $linkedService = $this->maybeCreateLinkedCustomerService($service, $request);
+            } catch (\Throwable $e) {
+                // If linking fails, don't break catalog creation; surface a helpful message instead
+            }
+        }
+
+        $response = [
             'message' => 'Service offering created successfully.',
             'service' => PortalFormatter::service($service),
-        ], 201);
+        ];
+
+        if ($linkedService) {
+            $response['linkedService'] = [
+                ...PortalFormatter::customerService($linkedService),
+                'userId' => (string) $linkedService->user_id,
+                'company' => $linkedService->user->company ?? null,
+                'client' => $linkedService->user->company ?? $linkedService->user->name,
+                'clientEmail' => $linkedService->user->email,
+            ];
+        }
+
+        return response()->json($response, 201);
     }
 
     public function updateCatalogService(Request $request, Service $service): JsonResponse
@@ -140,20 +308,29 @@ class AdminPortalController extends Controller
     public function createService(Request $request, ContractService $contractService): JsonResponse
     {
         $validated = $request->validate([
-            'userId' => ['required', 'integer', 'exists:users,id'],
+            'userId' => ['nullable', 'integer', 'exists:users,id'],
             'serviceId' => ['required', 'integer', 'exists:services,id'],
             'plan' => ['required', 'string', 'max:255'],
-            'status' => ['required', 'string'],
-            'renewsOn' => ['required', 'date'],
+            'status' => ['nullable', 'string'],
+            'renewsOn' => ['nullable', 'date'],
+            'email' => ['nullable', 'email'],
+            'client' => ['nullable', 'string', 'max:255'],
+            'clientName' => ['nullable', 'string', 'max:255'],
+            'customer' => ['nullable', 'string', 'max:255'],
         ]);
 
-        $mappedStatus = PortalFormatter::ADMIN_STATUS_MAP[$validated['status']] ?? null;
-
-        if (! $mappedStatus) {
-            return response()->json(['message' => 'Unsupported service status.'], 400);
+        // Resolve or validate target customer (support userId, email, company/name aliases)
+        $customer = null;
+        if (! empty($validated['userId'])) {
+            $customer = User::query()->findOrFail($validated['userId']);
+        } else {
+            $customer = $this->resolveUserFromRequest($request);
         }
 
-        $customer = User::query()->findOrFail($validated['userId']);
+        if (! $customer) {
+            return response()->json(['message' => 'Client account not found. Provide a valid userId, email, or company.'], 422);
+        }
+
         abort_unless($customer->role === 'customer', 422, 'Only customer accounts can receive services.');
 
         if ($customer->registration_status === 'pending' || $customer->registration_status === 'rejected') {
@@ -166,6 +343,8 @@ class AdminPortalController extends Controller
             return response()->json(['message' => 'Selected plan is not available for this service.'], 422);
         }
 
+        $mappedStatus = $this->resolveMappedServiceStatus($validated['status'] ?? null);
+
         $customerService = CustomerService::query()->create([
             'user_id' => $customer->id,
             'service_id' => $service->id,
@@ -174,7 +353,7 @@ class AdminPortalController extends Controller
             'category' => $service->category,
             'plan' => $validated['plan'],
             'status' => $mappedStatus,
-            'renews_on' => $validated['renewsOn'],
+            'renews_on' => $validated['renewsOn'] ?? $this->renewalDate($service->billing_cycle),
         ]);
 
         $contractService->ensureServiceContract($customerService);
@@ -190,7 +369,9 @@ class AdminPortalController extends Controller
             'message' => 'New service added successfully.',
             'service' => [
                 ...PortalFormatter::customerService($customerService->fresh()),
-                'client' => $customer->name,
+                'userId' => (string) $customer->id,
+                'company' => $customer->company ?? null,
+                'client' => $customer->company ?? $customer->name,
                 'clientEmail' => $customer->email,
             ],
         ], 201);
@@ -423,7 +604,9 @@ class AdminPortalController extends Controller
             'message' => 'Service cancellation queued successfully.',
             'service' => [
                 ...PortalFormatter::customerService($customerService->fresh('cancellationReviewer')),
-                'client' => $customerService->user->name,
+                'userId' => (string) $customerService->user_id,
+                'company' => $customerService->user->company ?? null,
+                'client' => $customerService->user->company ?? $customerService->user->name,
                 'clientEmail' => $customerService->user->email,
             ],
         ]);
@@ -461,7 +644,9 @@ class AdminPortalController extends Controller
             'message' => 'Service cancellation approved successfully.',
             'service' => [
                 ...PortalFormatter::customerService($customerService),
-                'client' => $customerService->user->name,
+                'userId' => (string) $customerService->user_id,
+                'company' => $customerService->user->company ?? null,
+                'client' => $customerService->user->company ?? $customerService->user->name,
                 'clientEmail' => $customerService->user->email,
             ],
         ]);
@@ -490,11 +675,13 @@ class AdminPortalController extends Controller
 
         return response()->json([
             'message' => 'Service cancellation request declined.',
-            'service' => [
-                ...PortalFormatter::customerService($customerService),
-                'client' => $customerService->user->name,
-                'clientEmail' => $customerService->user->email,
-            ],
+                'service' => [
+                    ...PortalFormatter::customerService($customerService),
+                    'userId' => (string) $customerService->user_id,
+                    'company' => $customerService->user->company ?? null,
+                    'client' => $customerService->user->company ?? $customerService->user->name,
+                    'clientEmail' => $customerService->user->email,
+                ],
         ]);
     }
 
@@ -504,11 +691,16 @@ class AdminPortalController extends Controller
             return response()->json(['message' => 'Only pending review orders can be approved.'], 422);
         }
 
-        $portalOrder->loadMissing(['user', 'items.customerService']);
+        $portalOrder->loadMissing(['user', 'items.customerService', 'invoice']);
+
+        // Approval is gated by explicit admin payment confirmation.
+        if (! $portalOrder->invoice || ! $portalOrder->invoice->paid_at) {
+            return response()->json(['message' => 'Order cannot be approved until the linked invoice is marked paid.'], 422);
+        }
 
         DB::transaction(function () use ($portalOrder, $contractService) {
             $portalOrder->update([
-                'status' => 'paid',
+                'status' => 'approved',
             ]);
 
             foreach ($portalOrder->items as $item) {
@@ -726,13 +918,53 @@ class AdminPortalController extends Controller
 
     private function adminPurchasePayload(PortalOrder $order): array
     {
+        $order = $this->ensureOrderInvoice($order);
+
         return [
             ...PortalFormatter::order($order),
-            'client' => $order->user->name,
+            'userId' => (string) $order->user_id,
+            'company' => $order->user->company ?? null,
+            'client' => $order->user->company ?? $order->user->name,
+            'clientEmail' => $order->user->email,
+            'invoice' => $order->invoice ? PortalFormatter::invoice($order->invoice) : null,
             'billing_in_charge' => $this->purchaseBillingInCharge($order),
             'deal_owner' => $order->user->registrationReviewer?->name,
             'stage' => $this->purchaseStage($order),
         ];
+    }
+
+    private function ensureOrderInvoice(PortalOrder $order): PortalOrder
+    {
+        $order->loadMissing(['user', 'items', 'payments', 'invoice.proofs']);
+
+        if ($order->invoice) {
+            return $order;
+        }
+
+        $invoice = Invoice::query()->where('portal_order_id', $order->id)->first();
+
+        if (! $invoice) {
+            $invoice = Invoice::createPortalInvoice([
+                'invoice_number' => Invoice::generateInvoiceNumber(),
+                'portal_order_id' => $order->id,
+                'user_id' => $order->user_id,
+                'client_name' => $order->user->company ?: $order->user->name,
+                'company_name' => $order->user->company,
+                'subtotal' => $order->total_amount,
+                'discounts' => 0,
+                'total_amount' => $order->total_amount,
+                'status' => 'pending_review',
+                'due_date' => ($order->created_at ?? now())->copy()->addDays(7)->toDateString(),
+            ]);
+        }
+
+        if ((int) $order->invoice_id !== (int) $invoice->id) {
+            $order->update(['invoice_id' => $invoice->id]);
+        }
+
+        $order->setRelation('invoice', $invoice->loadMissing(['proofs', 'user']));
+
+        return $order;
     }
 
     private function purchaseBillingInCharge(PortalOrder $order): ?string
@@ -745,11 +977,20 @@ class AdminPortalController extends Controller
     private function purchaseStage(PortalOrder $order): string
     {
         return match ($order->status) {
-            'paid' => 'Closed Won',
+            'paid', 'approved' => 'Closed Won',
             'pending_review' => 'Pending Review',
             'failed' => 'Closed Lost',
             default => 'Open',
         };
+    }
+
+    private function generateOrderNumber(): string
+    {
+        do {
+            $number = 'WSI-'.random_int(100000, 999999);
+        } while (PortalOrder::query()->where('order_number', $number)->exists());
+
+        return $number;
     }
 
     private function validateCatalogServiceRequest(Request $request): array
@@ -760,10 +1001,10 @@ class AdminPortalController extends Controller
             'category' => ['required', 'string', 'max:255'],
             'price' => ['required', 'numeric', 'min:0'],
             'billingCycle' => ['required', 'string', Rule::in(BillingCycle::values())],
-            'addons' => ['required', 'array'],
-            'addons.*' => ['required', 'array'],
+            'addons' => ['nullable', 'array'],
+            'addons.*' => ['array'],
             'addons.*.label' => ['required', 'string', 'max:255'],
-            'addons.*.price' => ['required', 'numeric', 'min:0'],
+            'addons.*.price' => ['nullable', 'numeric'],
             'addons.*.billingCycle' => ['nullable', 'string', Rule::in(BillingCycle::values())],
         ])->validate();
     }
@@ -771,7 +1012,8 @@ class AdminPortalController extends Controller
     private function prepareCatalogServicePayload(array $payload): array
     {
         $serviceBillingCycle = $this->normalizeBillingCycleInput($this->billingCycleInput($payload));
-        $addons = $payload['addons'] ?? [];
+        // Support both `addons` and legacy `add_ons` keys for compatibility
+        $addons = $payload['addons'] ?? $payload['add_ons'] ?? [];
 
         if (is_array($addons)) {
             $fallbackAddonBillingCycle = BillingCycle::normalize($serviceBillingCycle);
@@ -918,5 +1160,93 @@ class AdminPortalController extends Controller
             'one_time' => $date->copy()->addDays(30)->toDateTimeString(),
             default => $date->copy()->addMonth()->toDateTimeString(),
         };
+    }
+
+    private function resolveUserFromRequest(Request $request): ?User
+    {
+        $data = $request->all();
+
+        if (! empty($data['userId'])) {
+            return User::query()->find($data['userId']);
+        }
+
+        if (! empty($data['user_id'])) {
+            return User::query()->find($data['user_id']);
+        }
+
+        $email = $data['email'] ?? $data['clientEmail'] ?? $data['customerEmail'] ?? null;
+
+        if (! empty($email)) {
+            return User::query()->where('email', strtolower($email))->first();
+        }
+
+        $company = $data['company'] ?? $data['client'] ?? $data['clientName'] ?? $data['customer'] ?? null;
+
+        if (! empty($company)) {
+            $user = User::query()->where('role', 'customer')->where('company', $company)->first();
+
+            if ($user) {
+                return $user;
+            }
+
+            return User::query()->where('role', 'customer')->where('name', $company)->first();
+        }
+
+        return null;
+    }
+
+    private function resolveMappedServiceStatus(?string $status): string
+    {
+        if (empty($status)) {
+            return 'undergoing_provisioning';
+        }
+
+        $mapped = PortalFormatter::ADMIN_STATUS_MAP[$status] ?? null;
+
+        if ($mapped) {
+            return $mapped;
+        }
+
+        if (array_key_exists($status, PortalFormatter::SERVICE_STATUS_LABELS)) {
+            return $status;
+        }
+
+        $lower = strtolower($status);
+
+        if (array_key_exists($lower, PortalFormatter::SERVICE_STATUS_LABELS)) {
+            return $lower;
+        }
+
+        return 'undergoing_provisioning';
+    }
+
+    private function maybeCreateLinkedCustomerService(Service $service, Request $request): ?CustomerService
+    {
+        $client = $this->resolveUserFromRequest($request);
+
+        if (! $client) {
+            return null;
+        }
+
+        if ($client->role !== 'customer') {
+            return null;
+        }
+
+        $plan = $request->input('plan') ?? $service->configurations->pluck('label')->first() ?? $service->name;
+        $status = $this->resolveMappedServiceStatus($request->input('status') ?? null);
+        $renewsOn = $request->input('renewsOn') ?? $this->renewalDate($service->billing_cycle);
+
+        $customerService = CustomerService::query()->create([
+            'user_id' => $client->id,
+            'service_id' => $service->id,
+            'order_item_id' => null,
+            'name' => $service->name,
+            'category' => $service->category,
+            'plan' => $plan,
+            'status' => $status,
+            'renews_on' => $renewsOn,
+        ]);
+
+        return $customerService;
     }
 }

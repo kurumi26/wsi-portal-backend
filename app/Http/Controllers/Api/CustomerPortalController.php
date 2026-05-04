@@ -7,6 +7,8 @@ use App\Models\CustomerService;
 use App\Models\HelpdeskTicket;
 use App\Models\PortalNotification;
 use App\Models\PortalOrder;
+use App\Models\Invoice;
+use App\Models\InvoiceProof;
 use App\Models\Service;
 use App\Services\ContractService;
 use App\Services\HelpdeskService;
@@ -209,6 +211,23 @@ class CustomerPortalController extends Controller
                     'provisioning_status' => 'pending_review',
                 ]);
 
+                // Create invoice for this order
+                $invoice = Invoice::createPortalInvoice([
+                    'invoice_number' => Invoice::generateInvoiceNumber(),
+                    'portal_order_id' => $order->id,
+                    'user_id' => $request->user()->id,
+                    'client_name' => $request->user()->company ?: $request->user()->name,
+                    'company_name' => $request->user()->company,
+                    'subtotal' => $item['price'],
+                    'discounts' => 0,
+                    'total_amount' => $item['price'],
+                    'status' => 'pending_review',
+                    'due_date' => now()->addDays(7)->toDateString(),
+                ]);
+
+                // Link order -> invoice
+                $order->update(['invoice_id' => $invoice->id]);
+
                 $contractService->createOrderContract($order, $orderItem, $request->user(), $request);
 
                 return $order->load('items');
@@ -262,6 +281,21 @@ class CustomerPortalController extends Controller
             'status' => 'pending',
             'transaction_ref' => $path,
         ]);
+
+        // Create an invoice proof record if an invoice exists
+        if ($portalOrder->invoice_id) {
+            $portalOrder->invoice?->update([
+                'status' => 'pending_review',
+            ]);
+
+            InvoiceProof::create([
+                'invoice_id' => $portalOrder->invoice_id,
+                'path' => $path,
+                'uploaded_by' => $request->user()->id,
+                'uploaded_at' => now(),
+                'review_status' => 'pending',
+            ]);
+        }
 
         // Notify admins and billing team
         PortalNotification::create([

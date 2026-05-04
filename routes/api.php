@@ -41,6 +41,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/checkout', [CustomerPortalController::class, 'checkout']);
     Route::patch('/customer-services/{customerService}/request-cancellation', [CustomerPortalController::class, 'requestServiceCancellation']);
     Route::post('/orders/{portalOrder}/upload-proof', [CustomerPortalController::class, 'uploadPaymentProof']);
+    Route::get('/billing/invoices/me', [\App\Http\Controllers\Api\InvoiceController::class, 'mine']);
+    Route::get('/billing/invoices/{invoice}', [\App\Http\Controllers\Api\InvoiceController::class, 'show']);
 
     Route::prefix('/admin')->middleware('admin')->group(function () {
         Route::get('/contracts', [AdminContractsController::class, 'index']);
@@ -50,6 +52,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/contracts/{contract}/signed-document', [AdminContractsController::class, 'uploadSignedDocument']);
         Route::match(['patch', 'post'], '/contracts/{contract}/verify', [AdminContractsController::class, 'verify']);
         Route::get('/purchases', [AdminPortalController::class, 'purchases']);
+        Route::patch('/purchases/{portalOrder}/mark-paid', [AdminPortalController::class, 'markPurchasePaid']);
+        Route::get('/invoices', [\App\Http\Controllers\Api\InvoiceController::class, 'index']);
+        Route::get('/invoices/{invoice}', [\App\Http\Controllers\Api\InvoiceController::class, 'show']);
+        Route::patch('/invoices/{invoice}/mark-paid', [\App\Http\Controllers\Api\InvoiceController::class, 'markPaid']);
+        Route::post('/invoices/{invoice}/upload-proof', [\App\Http\Controllers\Api\InvoiceController::class, 'uploadProof']);
+        Route::post('/purchases', [AdminPortalController::class, 'createPurchase']);
         Route::get('/helpdesk/tickets', [AdminHelpdeskController::class, 'index']);
         Route::get('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'show']);
         Route::patch('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'update']);

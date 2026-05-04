@@ -12,6 +12,7 @@ use App\Models\ProfileUpdateRequest;
 use App\Models\Service;
 use App\Models\ServiceAddon;
 use App\Models\User;
+use App\Models\Invoice;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
@@ -26,6 +27,7 @@ class PortalFormatter
 
     public const ORDER_LABELS = [
         'paid' => 'Paid',
+        'approved' => 'Approved',
         'failed' => 'Failed',
         'pending_review' => 'Pending Review',
     ];
@@ -171,7 +173,22 @@ class PortalFormatter
     {
         $firstItem = $order->items->first();
 
-        $order->loadMissing('payments');
+        $order->loadMissing(['payments', 'invoice.proofs']);
+
+        $hasPendingCustomerSubmission = $order->payments->contains(fn ($payment) => $payment->status === 'pending')
+            || ($order->invoice?->proofs?->contains(fn ($proof) => $proof->review_status === 'pending') ?? false);
+
+        $invoiceStatusKey = null;
+
+        if ($order->invoice) {
+            $fallbackStatus = in_array($order->invoice->status, ['cancelled', 'overdue', 'pending_review', 'unpaid'], true)
+                ? $order->invoice->status
+                : ($order->status === 'pending_review' ? 'pending_review' : 'unpaid');
+
+            $invoiceStatusKey = $order->invoice->paid_at
+                ? 'paid'
+                : ($hasPendingCustomerSubmission ? 'pending_review' : $fallbackStatus);
+        }
 
         return [
             'id' => $order->order_number,
@@ -190,6 +207,66 @@ class PortalFormatter
                 'transactionRef' => $p->transaction_ref,
                 'createdAt' => $p->created_at?->toISOString(),
             ])->values()->all(),
+            'invoiceId' => $order->invoice?->id ? (string) $order->invoice->id : null,
+            'invoiceNumber' => $order->invoice?->invoice_number,
+            'invoiceStatus' => $invoiceStatusKey,
+            'invoice_status' => $invoiceStatusKey,
+            'billingStatus' => $invoiceStatusKey,
+            'billing_status' => $invoiceStatusKey,
+            'invoiceUrl' => $order->invoice?->invoice_number ? null : null,
+            'dueDate' => $order->invoice?->due_date?->toDateString(),
+            'paidAt' => $order->invoice?->paid_at?->toISOString(),
+            'paid_at' => $order->invoice?->paid_at?->toISOString(),
+            'invoicePaidAt' => $order->invoice?->paid_at?->toISOString(),
+        ];
+    }
+
+    public static function invoice(Invoice $invoice): array
+    {
+        $invoice->loadMissing(['order', 'proofs', 'user']);
+
+        $hasPendingCustomerSubmission = $invoice->proofs->contains(fn ($proof) => $proof->review_status === 'pending');
+        $fallbackStatus = in_array($invoice->status, ['cancelled', 'overdue', 'pending_review', 'unpaid'], true)
+            ? $invoice->status
+            : 'unpaid';
+        $statusKey = $invoice->paid_at
+            ? 'paid'
+            : ($hasPendingCustomerSubmission ? 'pending_review' : $fallbackStatus);
+
+        return [
+            'id' => (string) $invoice->id,
+            'invoiceNumber' => $invoice->invoice_number,
+            'invoice_number' => $invoice->invoice_number,
+            'status' => str_replace('_', ' ', ucfirst($statusKey)),
+            'statusKey' => $statusKey,
+            'invoiceStatus' => $statusKey,
+            'invoice_status' => $statusKey,
+            'billingStatus' => $statusKey,
+            'billing_status' => $statusKey,
+            'clientName' => $invoice->client_name,
+            'companyName' => $invoice->company_name,
+            'subtotal' => (float) $invoice->subtotal,
+            'discounts' => (float) $invoice->discounts,
+            'totalAmount' => (float) $invoice->total_amount,
+            'dueDate' => $invoice->due_date?->toDateString(),
+            'paidAt' => $invoice->paid_at?->toISOString(),
+            'paid_at' => $invoice->paid_at?->toISOString(),
+            'invoicePaidAt' => $invoice->paid_at?->toISOString(),
+            'paidBy' => $invoice->paid_by ? (string) $invoice->paid_by : null,
+            'paymentReference' => $invoice->payment_reference,
+            'internalNote' => $invoice->internal_note,
+            'orderId' => $invoice->portal_order_id ? $invoice->portal_order_id : null,
+            'orderNumber' => $invoice->order?->order_number,
+            'proofs' => $invoice->proofs->map(fn ($p) => [
+                'id' => (string) $p->id,
+                'path' => $p->path,
+                'uploadedAt' => $p->uploaded_at?->toISOString(),
+                'reviewStatus' => $p->review_status,
+                'reviewNote' => $p->review_note,
+                'uploadedBy' => $p->uploader?->name,
+            ])->values()->all(),
+            'createdAt' => $invoice->created_at?->toISOString(),
+            'updatedAt' => $invoice->updated_at?->toISOString(),
         ];
     }
 

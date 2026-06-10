@@ -5,20 +5,21 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
 use App\Models\HelpdeskTicket;
-use App\Models\PortalNotification;
-use App\Models\PortalOrder;
 use App\Models\Invoice;
 use App\Models\InvoiceProof;
+use App\Models\PortalNotification;
+use App\Models\PortalOrder;
 use App\Models\Service;
+use App\Models\User;
 use App\Services\ContractService;
 use App\Services\HelpdeskService;
 use App\Support\PortalFormatter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
-use App\Models\User;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class CustomerPortalController extends Controller
 {
@@ -87,7 +88,7 @@ class CustomerPortalController extends Controller
     {
         abort_unless($notification->user_id === $request->user()->id, 403);
 
-        $notification->delete();
+        $notification->forceDelete();
 
         return response()->json(['message' => 'Notification dismissed.']);
     }
@@ -141,7 +142,7 @@ class CustomerPortalController extends Controller
 
         // Notify admins and technical support
         User::query()
-            ->whereIn('role', ['admin', 'technical_support'])
+            ->withRoles(['admin', 'technical_support'])
             ->get()
             ->each(function (User $admin) use ($customerService, $request, $reason) {
                 PortalNotification::create([
@@ -177,13 +178,25 @@ class CustomerPortalController extends Controller
 
         // Create pending orders for admin review instead of immediately processing payments
         $orders = DB::transaction(function () use ($request, $validated, $contractService) {
+            $serviceIds = collect($validated['cart'])
+                ->pluck('serviceId')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+
             $serviceMap = Service::query()
-                ->whereIn('id', collect($validated['cart'])->pluck('serviceId'))
+                ->withIds($serviceIds)
                 ->get()
                 ->keyBy('id');
 
             return collect($validated['cart'])->map(function (array $item) use ($request, $validated, $serviceMap, $contractService) {
-                $service = $serviceMap->get($item['serviceId']);
+                $service = $serviceMap->get((int) $item['serviceId']);
+
+                if (! $service instanceof Service) {
+                    throw ValidationException::withMessages([
+                        'cart' => ['One or more cart items reference an unavailable service.'],
+                    ]);
+                }
+
                 $customerNote = $item['note'] ?? $validated['note'] ?? null;
 
                 $order = PortalOrder::create([
@@ -244,7 +257,7 @@ class CustomerPortalController extends Controller
 
         // Notify admins to review the new orders
         User::query()
-            ->whereIn('role', ['admin', 'technical_support', 'sales'])
+            ->withRoles(['admin', 'technical_support', 'sales'])
             ->get()
             ->each(function (User $admin) use ($request, $orders) {
                 PortalNotification::create([
@@ -269,7 +282,14 @@ class CustomerPortalController extends Controller
             'proof' => ['required', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
         ]);
 
-        $file = $request->file('proof');
+        $file = $validated['proof'];
+
+        if (! $file instanceof UploadedFile) {
+            throw ValidationException::withMessages([
+                'proof' => ['A valid payment proof file is required.'],
+            ]);
+        }
+
         $path = $file->store('payment_proofs', 'public');
 
         // Create a payment record referencing the uploaded proof
@@ -306,7 +326,7 @@ class CustomerPortalController extends Controller
         ]);
 
         User::query()
-            ->whereIn('role', ['admin', 'billing', 'technical_support'])
+            ->withRoles(['admin', 'billing', 'technical_support'])
             ->get()
             ->each(function (User $admin) use ($portalOrder, $request) {
                 PortalNotification::create([
@@ -323,22 +343,11 @@ class CustomerPortalController extends Controller
         return response()->json(['message' => 'Proof uploaded.', 'payment' => $payment]);
     }
 
-    private function renewalDate(string $billingCycle): string
-    {
-        $date = now();
-
-        return match ($billingCycle) {
-            'yearly' => $date->copy()->addYear()->toDateTimeString(),
-            'one_time' => $date->copy()->addDays(30)->toDateTimeString(),
-            default => $date->copy()->addMonth()->toDateTimeString(),
-        };
-    }
-
     private function generateOrderNumber(): string
     {
         do {
             $number = 'WSI-'.random_int(100000, 999999);
-        } while (PortalOrder::where('order_number', $number)->exists());
+        } while (PortalOrder::orderNumberExists($number));
 
         return $number;
     }

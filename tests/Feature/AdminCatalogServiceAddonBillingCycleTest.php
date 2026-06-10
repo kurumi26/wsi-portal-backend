@@ -98,7 +98,7 @@ class AdminCatalogServiceAddonBillingCycleTest extends TestCase
         $response
             ->assertOk()
             ->assertJsonPath('service.addons.0.billingCycle', 'one_time')
-            ->assertJsonPath('service.addons.0.price', 3000.0);
+            ->assertJsonPath('service.addons.0.price', 3000);
 
         $this->assertDatabaseHas('service_addons', [
             'service_id' => $service->id,

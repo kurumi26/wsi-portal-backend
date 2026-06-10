@@ -65,4 +65,11 @@ class PortalOrder extends Model
     {
         return $this->belongsTo(Invoice::class, 'invoice_id');
     }
+
+    public static function orderNumberExists(string $orderNumber): bool
+    {
+        return self::query()
+            ->where('order_number', '=', $orderNumber, 'and')
+            ->exists();
+    }
 }

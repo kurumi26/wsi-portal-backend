@@ -212,7 +212,7 @@ class ContractService
 
             $contract->save();
 
-            $this->syncRelatedContracts($contract, $this->syncableDecisionState($contract));
+            $this->syncRelatedContracts($contract, $this->syncableDecisionState($contract), sameScopeOnly: true);
 
             $this->audit(
                 $contract,
@@ -342,7 +342,7 @@ class ContractService
         return $contract->fresh()->load(['user', 'order.items', 'customerService.service', 'verifiedBy', 'signedDocumentUploader']);
     }
 
-    private function syncRelatedContracts(Contract $contract, array $attributes): void
+    private function syncRelatedContracts(Contract $contract, array $attributes, bool $sameScopeOnly = false): void
     {
         if (! $contract->customer_service_id || $attributes === []) {
             return;
@@ -351,6 +351,7 @@ class ContractService
         Contract::query()
             ->where('customer_service_id', $contract->customer_service_id)
             ->where('id', '!=', $contract->id)
+            ->when($sameScopeOnly, fn ($query) => $query->where('scope', $contract->scope))
             ->get()
             ->each(function (Contract $relatedContract) use ($attributes): void {
                 $relatedContract->fill($attributes);

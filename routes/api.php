@@ -62,6 +62,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'show']);
         Route::patch('/helpdesk/tickets/{helpdeskTicket}', [AdminHelpdeskController::class, 'update']);
         Route::patch('/purchases/{portalOrder}/approve', [AdminPortalController::class, 'approveOrder']);
+        Route::patch('/purchases/{portalOrder}/reject', [AdminPortalController::class, 'rejectOrder']);
         Route::get('/customer-services', [AdminPortalController::class, 'services']);
         Route::post('/catalog-services', [AdminPortalController::class, 'createCatalogService']);
         Route::patch('/catalog-services/{service}', [AdminPortalController::class, 'updateCatalogService']);

@@ -380,8 +380,8 @@ class AdminPortalController extends Controller
     public function adminUsers(): JsonResponse
     {
         $users = User::query()
-            ->whereIn('role', self::INTERNAL_USER_ROLES)
-            ->latest()
+            ->whereIn('role', self::INTERNAL_USER_ROLES, 'and', false)
+            ->latest('created_at')
             ->get()
             ->map(fn (User $user) => PortalFormatter::adminUser($user))
             ->values();
@@ -734,6 +734,50 @@ class AdminPortalController extends Controller
 
         return response()->json([
             'message' => 'Order approved successfully.',
+            'order' => $this->adminPurchasePayload($portalOrder->fresh(['items', 'payments', 'user.registrationReviewer'])),
+        ]);
+    }
+
+    public function rejectOrder(Request $request, PortalOrder $portalOrder): JsonResponse
+    {
+        $validated = $request->validate([
+            'note' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        if ($portalOrder->status !== 'pending_review') {
+            return response()->json(['message' => 'Only pending review orders can be rejected.'], 422);
+        }
+
+        DB::transaction(function () use ($portalOrder, $validated) {
+            $portalOrder->loadMissing(['user', 'invoice']);
+
+            $portalOrder->update([
+                'status' => 'failed',
+            ]);
+
+            if ($portalOrder->invoice) {
+                $portalOrder->invoice->update([
+                    'status' => 'cancelled',
+                    'internal_note' => $validated['note'] ?? null,
+                ]);
+            }
+
+            $message = 'Your order '.$portalOrder->order_number.' has been rejected by the admin.';
+
+            if (! empty($validated['note'])) {
+                $message .= ' Admin note: '.$validated['note'];
+            }
+
+            PortalNotification::create([
+                'user_id' => $portalOrder->user_id,
+                'title' => 'Order rejected',
+                'message' => $message,
+                'type' => 'danger',
+            ]);
+        });
+
+        return response()->json([
+            'message' => 'Order rejected successfully.',
             'order' => $this->adminPurchasePayload($portalOrder->fresh(['items', 'payments', 'user.registrationReviewer'])),
         ]);
     }

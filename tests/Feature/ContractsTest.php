@@ -263,7 +263,7 @@ class ContractsTest extends TestCase
         $this->assertNotNull($contract->signed_document_path);
         $this->assertNotNull($contract->signed_document_uploaded_at);
         $this->assertSame($customer->id, $contract->signed_document_uploaded_by);
-        Storage::disk('local')->assertExists($contract->signed_document_path);
+        $this->assertTrue(Storage::disk('local')->exists($contract->signed_document_path));
 
         $this->assertDatabaseHas('contract_audit_logs', [
             'contract_id' => $contract->id,

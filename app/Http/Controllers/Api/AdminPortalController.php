@@ -29,32 +29,144 @@ class AdminPortalController extends Controller
     {
         $clients = User::query()
             ->where('role', 'customer')
-            ->with(['latestProfileUpdateRequest.reviewer', 'registrationReviewer'])
+            ->with(['latestProfileUpdateRequest.reviewer', 'registrationReviewer', 'owner'])
             ->withCount('customerServices')
             ->latest()
             ->get()
-            ->map(fn (User $client) => [
-                'id' => (string) $client->id,
-                'name' => $client->name,
-                'email' => $client->email,
-                'company' => $client->company ?? '—',
-                'address' => $client->address,
-                'mobileNumber' => $client->mobile_number,
-                'tin' => $client->tin,
-                'profilePhotoUrl' => $client->profile_photo_url,
-                'joinedAt' => $client->created_at?->toISOString(),
-                'services' => $client->customer_services_count,
-                'status' => $client->registration_status === 'rejected'
-                    ? 'Rejected'
-                    : ($client->registration_status === 'pending'
-                        ? 'Pending Approval'
-                        : ($client->customer_services_count > 0 ? 'Active' : 'Approved')),
-                'registrationApproval' => PortalFormatter::registrationApproval($client),
-                'profileUpdateRequest' => PortalFormatter::profileUpdateRequest($client->latestProfileUpdateRequest),
-            ])
+            ->map(fn (User $client) => $this->adminClientPayload($client))
             ->values();
 
         return response()->json($clients);
+    }
+
+    public function createClient(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'ownerId' => ['required', 'integer', 'exists:users,id'],
+            'name' => ['required', 'string', 'max:255'],
+            'company' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')],
+            'password' => ['nullable', 'string', 'min:8'],
+            'enabled' => ['nullable', 'boolean'],
+        ]);
+
+        $owner = User::query()->findOrFail($validated['ownerId']);
+        abort_unless(in_array($owner->role, self::INTERNAL_USER_ROLES, true), 422, 'Selected client owner must be an internal portal user.');
+
+        $password = $validated['password'] ?? Str::random(12);
+
+        $client = User::query()->create([
+            'name' => $validated['name'],
+            'email' => strtolower($validated['email']),
+            'company' => $validated['company'],
+            'role' => 'customer',
+            'client_source' => 'created',
+            'owner_id' => $owner->id,
+            'registration_status' => 'approved',
+            'registration_reviewed_by' => $request->user()->id,
+            'registration_reviewed_at' => now(),
+            'is_enabled' => $validated['enabled'] ?? true,
+            'password' => Hash::make($password),
+        ]);
+
+        try {
+            Mail::raw(
+                "Hello {$client->name},\n\nAn account has been created for you on the WSI portal.\n\nEmail: {$client->email}\nPassword: {$password}\n\nPlease sign in and change your password.",
+                fn ($message) => $message->to($client->email)->subject('Your WSI Portal account')
+            );
+        } catch (\Throwable) {
+        }
+
+        PortalNotification::create([
+            'user_id' => $client->id,
+            'title' => 'Account created',
+            'message' => 'Your WSI portal account was created by the admin team.',
+            'type' => 'success',
+        ]);
+
+        return response()->json([
+            'message' => 'Client account created successfully.',
+            'client' => $this->adminClientPayload($client->fresh()->load(['registrationReviewer', 'latestProfileUpdateRequest.reviewer', 'owner'])->loadCount('customerServices')),
+        ], 201);
+    }
+
+    public function updateClient(Request $request, User $user): JsonResponse
+    {
+        abort_unless($user->role === 'customer', 422, 'Only customer accounts can be updated from Clients.');
+
+        $validated = $request->validate([
+            'ownerId' => ['nullable', 'integer', 'exists:users,id'],
+            'name' => ['required', 'string', 'max:255'],
+            'company' => ['nullable', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($user->id)],
+            'address' => ['nullable', 'string', 'max:255'],
+            'mobileNumber' => ['nullable', 'string', 'max:30'],
+            'password' => ['nullable', 'string', 'min:8'],
+            'enabled' => ['nullable', 'boolean'],
+        ]);
+
+        if (! empty($validated['ownerId'])) {
+            $owner = User::query()->findOrFail($validated['ownerId']);
+            abort_unless(in_array($owner->role, self::INTERNAL_USER_ROLES, true), 422, 'Selected client owner must be an internal portal user.');
+        }
+
+        $updates = [
+            'name' => $validated['name'],
+            'company' => $validated['company'] ?? null,
+            'email' => strtolower($validated['email']),
+            'address' => $validated['address'] ?? null,
+            'mobile_number' => $validated['mobileNumber'] ?? null,
+        ];
+
+        if (array_key_exists('ownerId', $validated)) {
+            $updates['owner_id'] = $validated['ownerId'] ?? null;
+        }
+
+        if (array_key_exists('enabled', $validated)) {
+            $updates['is_enabled'] = (bool) $validated['enabled'];
+        }
+
+        if (! empty($validated['password'])) {
+            $updates['password'] = Hash::make($validated['password']);
+        }
+
+        $user->update($updates);
+
+        PortalNotification::create([
+            'user_id' => $user->id,
+            'title' => 'Account updated',
+            'message' => 'Your account details were updated by the admin team.',
+            'type' => 'info',
+        ]);
+
+        return response()->json([
+            'message' => 'Customer account updated successfully.',
+            'client' => $this->adminClientPayload($user->fresh()->load(['registrationReviewer', 'latestProfileUpdateRequest.reviewer', 'owner'])->loadCount('customerServices')),
+        ]);
+    }
+
+    public function toggleClientStatus(Request $request, User $user): JsonResponse
+    {
+        abort_unless($user->role === 'customer', 422, 'Only customer accounts can be updated from Clients.');
+
+        $validated = $request->validate([
+            'enabled' => ['required', 'boolean'],
+        ]);
+
+        $user->update([
+            'is_enabled' => $validated['enabled'],
+        ]);
+
+        if (! $validated['enabled']) {
+            $user->tokens()->delete();
+        }
+
+        return response()->json([
+            'message' => $validated['enabled']
+                ? 'Client account enabled successfully.'
+                : 'Client account disabled successfully.',
+            'client' => $this->adminClientPayload($user->fresh()->load(['registrationReviewer', 'latestProfileUpdateRequest.reviewer', 'owner'])->loadCount('customerServices')),
+        ]);
     }
 
     public function purchases(): JsonResponse
@@ -960,6 +1072,45 @@ class AdminPortalController extends Controller
         abort_unless(in_array($user->role, self::INTERNAL_USER_ROLES, true), 422, 'This account is not managed from the Users page.');
     }
 
+    private function adminClientPayload(User $client): array
+    {
+        $registrationStatus = $client->registration_status;
+        $serviceCount = (int) ($client->customer_services_count ?? $client->customerServices()->count());
+        $isEnabled = (bool) $client->is_enabled;
+
+        $status = match (true) {
+            $registrationStatus === 'rejected' => 'Rejected',
+            $registrationStatus === 'pending' => 'Pending Approval',
+            ! $isEnabled => 'Inactive',
+            $serviceCount > 0 => 'Active',
+            default => 'Active',
+        };
+
+        $clientSource = $client->client_source ?? 'registered';
+
+        return [
+            'id' => (string) $client->id,
+            'name' => $client->name,
+            'email' => $client->email,
+            'company' => $client->company ?? '—',
+            'address' => $client->address,
+            'mobileNumber' => $client->mobile_number,
+            'tin' => $client->tin,
+            'profilePhotoUrl' => $client->profile_photo_url,
+            'joinedAt' => $client->created_at?->toISOString(),
+            'services' => $serviceCount,
+            'status' => $status,
+            'accountStatus' => $isEnabled ? 'Active' : 'Inactive',
+            'isEnabled' => $isEnabled,
+            'type' => $clientSource === 'created' ? 'Created' : 'Registered',
+            'clientSource' => $clientSource,
+            'ownerId' => $client->owner_id ? (string) $client->owner_id : null,
+            'ownerName' => $client->owner?->name,
+            'registrationApproval' => PortalFormatter::registrationApproval($client),
+            'profileUpdateRequest' => PortalFormatter::profileUpdateRequest($client->latestProfileUpdateRequest),
+        ];
+    }
+
     private function adminPurchasePayload(PortalOrder $order): array
     {
         $order = $this->ensureOrderInvoice($order);
@@ -972,7 +1123,7 @@ class AdminPortalController extends Controller
             'clientEmail' => $order->user->email,
             'invoice' => $order->invoice ? PortalFormatter::invoice($order->invoice) : null,
             'billing_in_charge' => $this->purchaseBillingInCharge($order),
-            'deal_owner' => $order->user->registrationReviewer?->name,
+            'deal_owner' => $order->user->owner?->name ?? $order->user->registrationReviewer?->name,
             'stage' => $this->purchaseStage($order),
         ];
     }

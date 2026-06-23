@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -46,5 +47,15 @@ class Service extends Model
     public function customerServices(): HasMany
     {
         return $this->hasMany(CustomerService::class);
+    }
+
+    /**
+     * @param  Builder<self>  $query
+     * @param  list<int>  $ids
+     * @return Builder<self>
+     */
+    public function scopeWithIds(Builder $query, array $ids): Builder
+    {
+        return $query->whereIn('id', $ids, 'and', false);
     }
 }

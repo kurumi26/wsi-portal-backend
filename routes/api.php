@@ -47,6 +47,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('/admin')->middleware('admin')->group(function () {
         Route::get('/contracts', [AdminContractsController::class, 'index']);
         Route::get('/clients', [AdminPortalController::class, 'clients']);
+        Route::post('/clients', [AdminPortalController::class, 'createClient']);
         Route::get('/users', [AdminPortalController::class, 'adminUsers']);
         Route::post('/users', [AdminPortalController::class, 'createAdminUser']);
         Route::post('/contracts/{contract}/signed-document', [AdminContractsController::class, 'uploadSignedDocument']);
@@ -72,6 +73,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/customer-services/{customerService}/reject-cancellation', [AdminPortalController::class, 'rejectServiceCancellation']);
         Route::patch('/customer-services/{customerService}/status', [AdminPortalController::class, 'updateServiceStatus']);
         Route::patch('/clients/{user}/billing', [AdminPortalController::class, 'updateClientBilling']);
+        Route::patch('/clients/{user}', [AdminPortalController::class, 'updateClient']);
+        Route::patch('/clients/{user}/status', [AdminPortalController::class, 'toggleClientStatus']);
         Route::patch('/users/{user}', [AdminPortalController::class, 'updateAdminUser']);
         Route::patch('/users/{user}/password', [AdminPortalController::class, 'resetAdminUserPassword']);
         Route::patch('/users/{user}/status', [AdminPortalController::class, 'toggleAdminUserStatus']);

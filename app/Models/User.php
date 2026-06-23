@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -30,6 +31,8 @@ class User extends Authenticatable
         'registration_admin_notes',
         'registration_reviewed_by',
         'registration_reviewed_at',
+        'owner_id',
+        'client_source',
         'password',
     ];
 
@@ -52,6 +55,21 @@ class User extends Authenticatable
     public function registrationReviewer(): BelongsTo
     {
         return $this->belongsTo(self::class, 'registration_reviewed_by');
+    }
+
+    public function owner(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'owner_id');
+    }
+
+    /**
+     * @param  Builder<self>  $query
+     * @param  list<string>  $roles
+     * @return Builder<self>
+     */
+    public function scopeWithRoles(Builder $query, array $roles): Builder
+    {
+        return $query->whereIn('role', $roles, 'and', false);
     }
 
     public function orders(): HasMany

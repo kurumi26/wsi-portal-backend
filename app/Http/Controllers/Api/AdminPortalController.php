@@ -185,6 +185,7 @@ class AdminPortalController extends Controller
     {
         $validated = $request->validate([
             'userId' => ['nullable', 'integer'],
+            'serviceId' => ['nullable', 'integer', 'exists:services,id'],
             'serviceName' => ['required', 'string', 'max:255'],
             'category' => ['nullable', 'string', 'max:255'],
             'amount' => ['required', 'numeric', 'min:0'],
@@ -213,8 +214,9 @@ class AdminPortalController extends Controller
         }
 
         $adminUserId = $request->user()->id;
+        $catalogService = $this->resolveCatalogServiceForManualPurchase($validated);
 
-        $order = DB::transaction(function () use ($validated, $client, $adminUserId) {
+        $order = DB::transaction(function () use ($validated, $client, $adminUserId, $catalogService) {
             $order = PortalOrder::query()->create([
                 'order_number' => $this->generateOrderNumber(),
                 'user_id' => $client->id,
@@ -228,14 +230,15 @@ class AdminPortalController extends Controller
             ]);
 
             $order->items()->create([
-                'service_id' => null,
+                'service_id' => $catalogService->id,
                 'service_name' => $validated['serviceName'],
-                'category' => $validated['category'] ?? 'Misc',
-                'configuration' => null,
-                'billing_cycle' => null,
-                'unit_price' => $validated['amount'],
-                'quantity' => 1,
-                'provisioning_status' => null,
+                'category' => $validated['category'] ?? $catalogService->category,
+                'configuration' => 'Manual',
+                'addon' => null,
+                'customer_note' => $validated['notes'] ?? null,
+                'price' => $validated['amount'],
+                'billing_cycle' => $catalogService->billing_cycle ?? 'one_time',
+                'provisioning_status' => 'pending_review',
             ]);
 
             // create invoice and link to order
@@ -1299,6 +1302,38 @@ class AdminPortalController extends Controller
         }
 
         return $slug;
+    }
+
+    private function resolveCatalogServiceForManualPurchase(array $validated): Service
+    {
+        if (! empty($validated['serviceId'])) {
+            $service = Service::query()->find($validated['serviceId']);
+
+            if ($service) {
+                return $service;
+            }
+        }
+
+        $serviceName = trim($validated['serviceName']);
+        $category = trim($validated['category'] ?? '') ?: 'Misc';
+
+        $existing = Service::query()
+            ->whereRaw('LOWER(name) = ?', [strtolower($serviceName)])
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        return Service::query()->create([
+            'slug' => $this->generateUniqueServiceSlug($serviceName),
+            'category' => $category,
+            'name' => $serviceName,
+            'description' => 'Manual admin transaction service for '.$serviceName.'.',
+            'price' => $validated['amount'],
+            'billing_cycle' => 'one_time',
+            'is_active' => true,
+        ]);
     }
 
     private function billingCycleInput(array $payload): mixed
